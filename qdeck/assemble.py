@@ -77,6 +77,12 @@ class Question:
         return any(getattr(f, attr) for f in [self.root] + self.parts)
 
 
+def _dev_ratio(text):
+    dev = sum(1 for c in text or "" if "\u0900" <= c <= "\u097f")
+    lat = sum(1 for c in text or "" if c.isascii() and c.isalpha())
+    return dev / (dev + lat) if dev + lat else 0.0
+
+
 def _norm(t):
     return re.sub(r"[^\wऀ-ॿ]+", " ", (t or "").lower()).strip()
 
@@ -163,19 +169,25 @@ def assemble(frags: List[Fragment], lang_pref="en", log=print):
     removed = set()
     if lang_pref in ("en", "hi", "both"):
         for n, qs in by_num.items():
-            langs = {q.lang for q in qs}
-            if "en" in langs and "hi" in langs:
-                pref = "hi" if lang_pref == "hi" else "en"
-                main = next(q for q in qs if q.lang == pref)
-                for q in qs:
-                    if q is not main and q.lang in ("en", "hi") and q.lang != pref:
-                        removed.add(id(q))
-                        dropped["twins"] += 1
-                        if lang_pref == "both":
-                            main.twins.append(q.root)
-                            main.twins += q.parts
-                if "bilingual_twin" not in main.flags:
-                    main.flags.append("bilingual_twin")
+            if len(qs) < 2:
+                continue
+            ratios = {id(q): _dev_ratio(q.text) for q in qs}
+            lo = min(qs, key=lambda q: ratios[id(q)])
+            hi = max(qs, key=lambda q: ratios[id(q)])
+            # same number printed in two scripts (Hindi page + English page)
+            if ratios[id(hi)] - ratios[id(lo)] < 0.3:
+                continue
+            main = hi if lang_pref == "hi" else lo
+            for q in qs:
+                if q is main or abs(ratios[id(q)] - ratios[id(main)]) < 0.3:
+                    continue
+                removed.add(id(q))
+                dropped["twins"] += 1
+                if lang_pref == "both":
+                    main.twins.append(q.root)
+                    main.twins += q.parts
+            if "bilingual_twin" not in main.flags:
+                main.flags.append("bilingual_twin")
     questions = [q for q in questions if id(q) not in removed]
 
     # ---- duplicate pages / repeated photos: same number + same text --------------------

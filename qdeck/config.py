@@ -33,7 +33,7 @@ class Settings:
     # Digital PDFs: trust the classical parser when its numbering integrity is perfect.
     classical_first: bool = field(default_factory=lambda: _env("CLASSICAL_FIRST", True))
     layout_px: int = field(default_factory=lambda: _env("LAYOUT_PX", 1536))   # long side sent to the LLM
-    crop_dpi: int = field(default_factory=lambda: _env("CROP_DPI", 220))       # dpi of the displayed snapshot
+    crop_dpi: int = field(default_factory=lambda: _env("CROP_DPI", 250))       # px per inch of the question pictures as shown on the slide
     cache_dir: str = field(default_factory=lambda: _env("CACHE_DIR", ".cache"))
     use_llm: bool = field(default_factory=lambda: _env("USE_LLM", True))
 

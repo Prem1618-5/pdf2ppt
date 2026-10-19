@@ -20,6 +20,8 @@ MAX_IMAGE_SIDE = 3200
 
 
 class SourcePage:
+    native_ppi = None
+
     def __init__(self, file_name, index, kind):
         self.file_name = file_name
         self.index = index      # 0-based index within its file
@@ -64,6 +66,17 @@ class PdfPage(SourcePage):
         self.width_in = self.rect.width / 72.0
         self.height_in = self.rect.height / 72.0
         self.n_images = len(imgs)
+        self.native_ppi = None
+        if kind == "pdf-scan":   # resolution of the largest embedded photo/scan
+            best = 0
+            for im in page.get_images(full=True):
+                try:
+                    for r in page.get_image_rects(im[0]):
+                        if r.width * r.height > best and r.width > 0:
+                            best = r.width * r.height
+                            self.native_ppi = im[2] / (r.width / 72.0)
+                except Exception:
+                    pass
 
     def render_full(self, long_side):
         z = long_side / max(self.rect.width, self.rect.height)

@@ -72,6 +72,7 @@ def run_job(paths, out_dir, settings, options=None, progress=lambda *a: None, lo
         pages.append({"seq": seq, "ref": page.ref, "kind": page.kind, "jpeg": jp, "dup_of": dup_of,
                       "lines": page.text_lines(), "figs": page.figure_boxes(), "src": page.file_name,
                       "index": page.index, "w_in": page.width_in, "h_in": page.height_in,
+                      "native_ppi": page.native_ppi,
                       "thumb_w": size[0], "thumb_h": size[1]})
         progress("rendered", seq + 1, n_pages)
     classical = ClassicalLayout()
@@ -200,8 +201,9 @@ def run_job(paths, out_dir, settings, options=None, progress=lambda *a: None, lo
                f"({sum(1 for p in pages if p.get('fallback'))} as quota fallback).")
     page_meta = [{"seq": p["seq"], "ref": p["ref"], "kind": p["kind"], "src": os.path.abspath(p["src"]),
                   "index": p["index"], "w_in": p["w_in"], "h_in": p["h_in"], "thumb": os.path.abspath(p["jpeg"]),
+                  "native_ppi": p.get("native_ppi"),
                   "thumb_w": p["thumb_w"], "thumb_h": p["thumb_h"]} for p in pages]
-    settings_p = {"layout": opts.get("layout", "fill"), "blank_after": opts.get("blank_after", True),
+    settings_p = {"dpi": settings.crop_dpi, "layout": opts.get("layout", "fill"), "blank_after": opts.get("blank_after", True),
                   "watermark": opts["watermark"], "theme": opts.get("theme", "light")}
     proj = Project.create(out_dir, page_meta, items, settings_p, integrity, summary)
     for k, it in enumerate(proj.data["items"], 1):

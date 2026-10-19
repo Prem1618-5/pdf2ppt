@@ -30,7 +30,7 @@ def lock_for(path):
         return _locks.setdefault(path, threading.RLock())
 
 
-DEFAULT_SETTINGS = {"layout": "fill", "blank_after": True, "watermark": "remove", "theme": "light"}
+DEFAULT_SETTINGS = {"layout": "fill", "blank_after": True, "watermark": "remove", "theme": "light", "dpi": 250}
 
 
 class Project:
@@ -119,7 +119,7 @@ class Project:
     def _render_key(self, it):
         s = self.settings
         blob = json.dumps([it.get("parts"), it.get("custom_image"), it.get("erase"), s["watermark"],
-                           s.get("theme"), it.get("no_compress")], sort_keys=True)
+                           s.get("theme"), it.get("no_compress"), s.get("layout"), s.get("dpi"), 3], sort_keys=True)
         return hashlib.md5(blob.encode()).hexdigest()[:12]
 
     def item_png(self, iid):
@@ -129,16 +129,34 @@ class Project:
         if not os.path.exists(path):
             img, ppi = self.render_parts(it)
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            img.save(path)
+            img.save(path, compress_level=1)          # working copy: fast, lossless
             it["img_w"], it["img_h"], it["ppi"] = img.width, img.height, ppi
             glyph = imaging.text_height_pt(img, ppi)
             it["glyph_pt"] = glyph
         return path
 
-    def render_parts(self, it, dpi=220):
+    def target_dpi(self, it):
+        """Pixels per *paper* inch so the picture has `settings.dpi` pixels per inch
+        at the size it is shown on the slide (questions are enlarged to fill it)."""
+        from .deck import FULL, Q1
+        out_dpi = int(self.settings.get("dpi", 300))
+        box = FULL if self.settings.get("layout", "fill") == "fill" else Q1
+        w = h = 0.0
+        for part in it.get("parts") or []:
+            meta = self.data["pages"][part["page"]]
+            x0, y0, x1, y1 = part["box"]
+            w = max(w, (x1 - x0) * meta["w_in"])
+            h += (y1 - y0) * meta["h_in"] + 0.05
+        if w <= 0 or h <= 0:
+            return out_dpi
+        scale = min(box[2] / w, box[3] / h)
+        return int(min(600, max(out_dpi, out_dpi * scale)))
+
+    def render_parts(self, it, dpi=None):
         """Crop every part from its page, clean it (watermark, rules, light theme),
         stack page-split parts with their original alignment, trim margins."""
         s = self.settings
+        dpi = dpi or self.target_dpi(it)
         if it.get("custom_image"):
             img = Image.open(os.path.join(self.root, "items", it["custom_image"])).convert("RGB")
             return img, float(it.get("custom_ppi") or 200)
@@ -148,10 +166,15 @@ class Project:
             page = self.open_page(part["page"])
             try:
                 box = part["box"]
-                img = page.crop(box, dpi)
-                ppi = dpi
-                if meta["kind"] == "image":
-                    ppi = min(dpi, img.width / max(1e-6, (box[2] - box[0]) * page.width_in))
+                native = float(meta.get("native_ppi") or dpi)
+                if meta["kind"] == "pdf-digital":
+                    img, ppi = page.crop(box, dpi), dpi                 # vector: render sharp at dpi
+                elif meta["kind"] == "image":
+                    img = page.crop(box, 10000)                          # native pixels, no resampling
+                    ppi = img.width / max(1e-6, (box[2] - box[0]) * page.width_in)
+                else:                                                    # scanned / photographed PDF page
+                    ppi = min(dpi, native * 1.0)
+                    img = page.crop(box, ppi)
                 erase = [e for e in it.get("erase") or [] if e.get("page") == part["page"]]
                 if erase:
                     W, H = img.size
@@ -163,9 +186,14 @@ class Project:
                                        screenshot=meta["kind"] == "image")
                 img = imaging.strip_rules(img)
                 img, rect = imaging.tighten(img)
+                rect_ppi = ppi
+                if meta["kind"] != "pdf-digital":
+                    # photos / scans / screenshots: upscale to the display resolution and
+                    # crisp the ink (also clears pale watermarks when removal is on)
+                    img, ppi = imaging.enhance(img, ppi, max(dpi, ppi), crisp_ink=s["watermark"] == "remove")
                 imgs.append(img)
                 ppis.append(ppi)
-                lefts.append(box[0] * meta["w_in"] + rect[0] / ppi)
+                lefts.append(box[0] * meta["w_in"] + rect[0] / rect_ppi)
             finally:
                 doc = getattr(page, "_doc_owner", None)
                 if doc is not None:
@@ -244,7 +272,8 @@ class Project:
         path = self.item_png(it["id"])
         img = Image.open(path)
         ppi = float(it.get("ppi") or 220)
-        data, fmt, px = imaging.encode(img, int(deck.box[2] * 220), int(deck.box[3] * 220))
+        dpi = int(self.settings.get("dpi", 300))
+        data, fmt, px = imaging.encode(img, int(deck.box[2] * dpi * 1.05), int(deck.box[3] * dpi * 1.05))
         scale_in = deck.add_snapshot(data, px, notes, src_w_in=img.width / ppi, glyph_pt=it.get("glyph_pt"))
         return scale_in
 

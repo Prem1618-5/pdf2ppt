@@ -14,7 +14,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def F(page, order, role, num=None, lang="en", cont_prev=False, cont_next=False, text="", conf=0.9):
     return Fragment(page_seq=page, page_ref=f"p{page + 1}", order=order, role=role,
                     label=None if num is None else f"{num}.", number=num, lang=lang, box=(0, 0, 1, 1),
-                    crop_path="", text=text or f"question {num} {lang}", options=[], confidence=conf,
+                    crop_path="", text=text or (f"प्रश्न {num} हिंदी पाठ" if lang == "hi" else f"question {num} {lang}"),
+                    options=[], confidence=conf,
                     continues_previous=cont_prev, continues_on_next=cont_next)
 
 

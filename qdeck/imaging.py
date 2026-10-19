@@ -93,6 +93,24 @@ def is_dark(img):
 def to_light(img, watermark="keep", photo=True, screenshot=False):
     """Return a light-theme version: dark frames are inverted, tinted paper becomes
     white. Watermarks are kept at their original faint tone unless watermark=remove."""
+    if not photo and not screenshot:
+        # born-digital render: already white paper, black text. Cheap uint8 path; keep
+        # colour only if the crop really has colour (coloured figures).
+        small = img.convert("RGB").resize((max(1, img.width // 8), max(1, img.height // 8)))
+        sa = np.asarray(small).astype(np.int16)
+        colour = float((sa.max(axis=2) - sa.min(axis=2)).mean()) > 4
+        out = img.convert("RGB") if colour else img.convert("L")
+        if watermark == "remove":
+            if out.mode == "L":
+                out = out.point(lambda v: 255 if v > 238 else v)
+            else:
+                g = np.asarray(out.convert("L"))
+                a = np.asarray(out).copy()
+                a[g > 238] = 255
+                out = Image.fromarray(a)
+        if float(np.median(np.asarray(small.convert("L")))) >= 110:
+            return out
+        img = out          # dark digital page (rare): fall through to inversion
     a = np.asarray(img.convert("RGB")).astype(np.float32)
     if float(np.median(a.mean(axis=2))) < 110:      # light text on dark background
         a = 255.0 - a
@@ -127,9 +145,10 @@ def to_light(img, watermark="keep", photo=True, screenshot=False):
         # pale or tinted-but-light pixels are watermark/background, real ink is dark.
         # Digital pages have pure black text, so a lower cut also removes grey
         # watermark lettering and its anti-aliased edges.
-        cut = 165 if photo else 128
-        wm = (lum > cut) | ((sat > 40) & (lum > 120))
-        a[wm] = 255
+        # photos/scans: no hard threshold here (it eats faint strokes of photographed
+        # text); enhance() removes smooth pale watermarks via local contrast instead.
+        if not photo:
+            a[lum > 238] = 255
     return Image.fromarray(a.astype(np.uint8))
 
 
@@ -160,7 +179,9 @@ def stack(images, gap=14, offsets=None):
 
 
 def encode(img, max_w_px, max_h_px):
-    """Resize to what the quadrant can show and pick the smaller of PNG / JPEG."""
+    """Resize to what the slide shows (at the target dpi) and store losslessly when the
+    picture is mostly text/line art (PNG, full 8-bit grey: sharp glyph edges); photos of
+    figures with lots of colour fall back to high-quality JPEG only when PNG is huge."""
     im = img.convert("RGB")
     s = min(1.0, max_w_px / im.width, max_h_px / im.height)
     if s < 1.0:
@@ -170,24 +191,61 @@ def encode(img, max_w_px, max_h_px):
     if colourful < 6:
         im = im.convert("L")
     png = io.BytesIO()
-    (im.quantize(32) if im.mode == "RGB" else im.point(lambda v: v // 16 * 17)).save(png, "PNG", optimize=True)
+    im.save(png, "PNG", compress_level=6)
+    if im.mode == "L":
+        return png.getvalue(), "png", im.size          # text / line art: always lossless
     jpg = io.BytesIO()
-    im.save(jpg, "JPEG", quality=85, optimize=True)
-    if png.tell() <= jpg.tell() * 1.4:
+    im.save(jpg, "JPEG", quality=92, subsampling=0)
+    if png.tell() <= jpg.tell() * 2.0:
         return png.getvalue(), "png", im.size
     return jpg.getvalue(), "jpeg", im.size
+
+
+def enhance(img, src_ppi, target_ppi=300, crisp_ink=True):
+    """Low-resolution photos/screenshots: upscale to the target ppi (Lanczos), unsharp
+    mask scaled to the upscale factor, and a gentle tone curve that makes ink solid
+    black while paper stays white. Gives crisp characters and clean diagram lines
+    on a projector without any ML model."""
+    from PIL import ImageFilter
+    f = target_ppi / max(src_ppi, 1.0)
+    im = img
+    if f > 1.15:
+        f = min(f, 4.0)
+        im = im.resize((int(im.width * f), int(im.height * f)), Image.LANCZOS)
+    else:
+        f = 1.0
+    im = im.filter(ImageFilter.UnsharpMask(radius=max(1.0, 0.9 * f), percent=140, threshold=2))
+    if not crisp_ink:
+        a = np.asarray(im.convert("RGB")).astype(np.float32) / 255.0
+        a = np.clip((a - 0.06) / 0.86, 0, 1) ** 1.25
+        return Image.fromarray((a * 255).astype(np.uint8)), (src_ppi * f)
+    g = np.asarray(im.convert("L")).astype(np.float32)
+    # ink crisping: compare each pixel with its neighbourhood and push it through a
+    # smooth sigmoid -> solid black strokes with soft (anti-aliased) edges, white paper
+    local = cv2.GaussianBlur(g, (0, 0), sigmaX=max(4.0, 3.0 * f))
+    ink = 1.0 / (1.0 + np.exp(-(local - g - 14.0) * 0.3))   # paper -> ~0, strokes -> ~1
+    crisp = 255.0 * (1.0 - ink)
+    dark = g < 110                                        # solid areas (filled shapes, bold)
+    crisp[dark] = np.minimum(crisp[dark], g[dark])
+    base = np.clip((g - 15) * 255.0 / 215.0, 0, 255)
+    out = np.minimum(0.85 * crisp + 0.15 * base, np.maximum(crisp, base))
+    out[out > 232] = 255
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)), (src_ppi * f)
 
 
 def tighten(img):
     """Shrink a crop to its real content: ignore long table rules, and drop a narrow
     strip on the right (marks / negative-marks cells) separated by a wide blank gap.
     The left edge is never cut, so the printed question number stays visible."""
+    H0, W0 = img.height, img.width
+    if H0 < 20 or W0 < 20:
+        return img, (0, 0, W0, H0)
+    full = img
+    img, f = _small(img)
     H, W = img.height, img.width
-    if H < 20 or W < 20:
-        return img, (0, 0, W, H)
     c = content_mask(img)
     if c.sum() < 50:
-        return img, (0, 0, W, H)
+        return full, (0, 0, W0, H0)
     cols = c.sum(axis=0) > 0
     xs = np.where(cols)[0]
     right = xs.max() + 1
@@ -206,10 +264,20 @@ def tighten(img):
     xs = np.where(c[:, :right].sum(axis=0) > 0)[0]
     ys = np.where(c[:, :right].sum(axis=1) > 0)[0]
     if not len(xs) or not len(ys):
-        return img, (0, 0, W, H)
+        return full, (0, 0, W0, H0)
     mg = 8
     rect = (max(0, xs.min() - mg), max(0, ys.min() - mg), min(W, xs.max() + 1 + mg), min(H, ys.max() + 1 + mg))
-    return img.crop(rect), rect
+    rect = tuple(int(round(v * f)) for v in rect)
+    rect = (rect[0], rect[1], min(W0, rect[2]), min(H0, rect[3]))
+    return full.crop(rect), rect
+
+
+def _small(img, max_side=2400):
+    """Work copy for mask analysis (big 600-dpi renders are analysed at <= max_side)."""
+    f = max(1.0, max(img.size) / max_side)
+    if f == 1.0:
+        return img, 1.0
+    return img.resize((int(img.width / f), int(img.height / f)), Image.BILINEAR), f
 
 
 def content_mask(img):
@@ -224,8 +292,10 @@ def content_mask(img):
 def compress_gaps(img, ppi, max_gap_in=0.12):
     """Collapse tall blank horizontal bands (common between stacked options) so
     the question can be shown larger. Not used on figures."""
-    m = content_mask(img)
-    blank = m.sum(axis=1) == 0
+    sm, f = _small(img)
+    ms = content_mask(sm).sum(axis=1) == 0
+    idx = np.minimum((np.arange(img.height) / f).astype(int), len(ms) - 1)
+    blank = ms[idx]
     max_gap = max(4, int(max_gap_in * ppi))
     keep, run = [], 0
     for y, b in enumerate(blank):
@@ -242,18 +312,23 @@ def strip_rules(img):
     """Erase table rules: vertical lines taller than ~55% of the crop and horizontal
     lines wider than ~75% (cell borders around a question). Short lines such as
     underlines, fraction bars and figure frames are kept."""
+    full = img
+    img, f = _small(img)
     g = np.asarray(img.convert("L"))
     H, W = g.shape
     if H < 30 or W < 30:
-        return img
+        return full
     m = (cv2.adaptiveThreshold(g, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 35, 18) > 0).astype(np.uint8)
     vert = cv2.morphologyEx(m, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, int(H * 0.55))))
     horiz = cv2.morphologyEx(m, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (int(W * 0.75), 1)))
-    rules = cv2.dilate(vert | horiz, np.ones((3, 3), np.uint8)) > 0
+    rules = cv2.dilate(vert | horiz, np.ones((3, 3), np.uint8))
     if not rules.any():
-        return img
-    a = np.asarray(img.convert("RGB")).copy()
-    a[rules] = 255
+        return full
+    if f != 1.0:
+        rules = cv2.resize(rules, (full.width, full.height), interpolation=cv2.INTER_NEAREST)
+        rules = cv2.dilate(rules, np.ones((int(f) + 1, int(f) + 1), np.uint8))
+    a = np.asarray(full).copy()
+    a[rules > 0] = 255
     return Image.fromarray(a)
 
 

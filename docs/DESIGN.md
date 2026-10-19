@@ -26,7 +26,8 @@ This brief comes with a working implementation (`qdeck/`, `cli.py`, `static/inde
 Browser (upload) ──► FastAPI /api/jobs ──► job queue (1 worker)
   page stream: PyMuPDF/PIL → 1536-px JPEG → dHash (duplicate-page skip)
   ─► Gemini (3 pages per request, JSON schema, cache by image hash)
-  ─► per page: padded box → clip-render at 220 dpi → ink-snap → tighten → light-normalise
+  ─► per page: XY-cut reading order (never trust the LLM's order) → box refine (hanging-indent
+     block starts per column) → padded box → clip-render at 220 dpi → ink-snap → tighten → light-normalise
   ─► assemble: continuations · passages · bilingual twins · duplicates · sections
   ─► python-pptx (axes on master) + QA HTML/CSV + manifest.json
 Browser polls /api/jobs/<id> every 3 s ─► download .pptx / report ─► files auto-deleted
@@ -54,7 +55,12 @@ Browser polls /api/jobs/<id> every 3 s ─► download .pptx / report ─► fil
 | C11 free tier | Batching, cache, RPM throttle, 429 per-minute vs per-day detection, 503 failover, classical fallback. |
 | C12 dark theme | `manifest.json` stores boxes, crops and text per question. `theme=dark` already exists as a switch (master background + inverted snapshots). |
 
-**g. Failure modes.** The LLM occasionally returns slightly tight boxes (mitigated by padding + ink-snap). It can mislabel a continuation as a new question on very dense pages, which shows up as a numbering gap or duplicate in the report. 503 storms slow jobs down. Requests per day is the hard ceiling.
+**g. Failure modes (measured).** Full Flash models (3.8 / 3-preview) return accurate boxes. Flash-**lite**, the only tier left once the 20/day caps are used, has three problems:
+- **Reading order:** it emits row-wise order on multi-column spreads. Fixed by recomputing order with a band-aware XY-cut.
+- **Boxes:** they drift vertically, by up to a whole question on dense maths pages (sample A). Partly fixed by snapping to hanging-indent block starts; the rest is flagged `low_confidence`.
+- **Language:** it labels Hindi blocks as "bilingual". Fixed by deriving language from the script ratio.
+
+Lite results are cached as "soft" entries, so a better model replaces them on the next run. 503 storms slow jobs down. Requests per day is the hard ceiling.
 
 **h. Cost/time/RAM.** $0. NDA 22 photo pages: 7 requests, about 4-6 min. Peak RAM about 250 MB.
 

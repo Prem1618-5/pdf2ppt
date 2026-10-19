@@ -42,6 +42,8 @@ def refine(page_img, frags, boxes):
     bw = cv2.adaptiveThreshold(g, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 31, 18)
     bw = cv2.morphologyEx(bw, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))   # drop speckle
     new = list(boxes)
+    # running footers / logos the LLM marked: the last block of a column stops there
+    stops = [b for f, b in zip(frags, boxes) if b is not None and f.get("role") in ("clutter", "section_header")]
     idx = [i for i, (f, b) in enumerate(zip(frags, boxes)) if b is not None and f.get("role") in BOUNDARY_ROLES
            and (b[2] - b[0]) < 0.6]
     # group into columns by horizontal overlap
@@ -94,7 +96,7 @@ def refine(page_img, frags, boxes):
                 bottom = y1 * H
                 after = [ln for ln in all_lines if ln[0] >= top]
                 for a, b in after:
-                    if a > bottom + 2.2 * med_gap + 2:
+                    if a > bottom + 1.6 * med_gap + 2 or _in_clutter((a + b) / 2 / H, c, stops):
                         break
                     bottom = max(bottom, b)
             if abs(bottom - y1 * H) > MAX_MOVE * H * 1.5:
@@ -102,3 +104,10 @@ def refine(page_img, frags, boxes):
             if bottom - top > 6:
                 new[i] = (x0, max(0.0, top / H), x1, min(1.0, bottom / H))
     return new
+
+
+def _in_clutter(y, col, stops):
+    for x0, y0, x1, y1 in stops:
+        if y0 - 0.004 <= y <= y1 + 0.004 and min(x1, col["x1"]) > max(x0, col["x0"]):
+            return True
+    return False

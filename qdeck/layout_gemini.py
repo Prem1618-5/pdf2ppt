@@ -153,6 +153,19 @@ class GeminiLayout:
                "temperature": 0, "maxOutputTokens": 60000, "thinkingConfig": {"thinkingLevel": "low"}}
         body = {"contents": [{"parts": parts}], "generationConfig": gen}
         last_err = None
+        for rnd in range(4):          # 503 storms are transient: go round the models again
+            out = self._call_round(body, gen)
+            if isinstance(out, dict):
+                return out
+            last_err = out[1]
+            if out[0] == "dead":
+                break
+            self.log(f"all models busy; retrying in {30 * (rnd + 1)}s")
+            time.sleep(30 * (rnd + 1))
+        raise QuotaExhausted(last_err or "all models exhausted")
+
+    def _call_round(self, body, gen):
+        last_err, busy = None, False
         for model in self.models:
             if model in self.dead_models:
                 continue
@@ -199,6 +212,7 @@ class GeminiLayout:
                     continue
                 if r.status_code in (500, 502, 503, 504) and attempt >= 1:
                     self.log(f"{model} overloaded (HTTP {r.status_code}); trying next model")
+                    busy = True
                     break
                 time.sleep(min(30, 3 * 2 ** attempt + random.random()))
-        raise QuotaExhausted(last_err or "all models exhausted")
+        return ("busy" if busy else "dead", last_err)

@@ -243,3 +243,42 @@ def integrity_check(questions):
         out["sections"].append({"section": s + 1, "first": lo, "last": hi, "count": len(qs)})
     out["ok"] = not out["gaps"] and not out["duplicates"] and out["detected"] == out["expected"]
     return out
+
+
+def reading_order(items, key=lambda it: it["box"]):
+    """Recursive XY-cut on fragment boxes (x0,y0,x1,y1 fractions). A column gutter /
+    spread fold is cut first. If wide blocks (full-width header, wide table, shared
+    passage) bridge the gutters, the group is split into horizontal bands at those wide
+    blocks and each band is cut into columns again. Returns items in reading order,
+    independent of the order the LLM happened to emit."""
+    if len(items) <= 1:
+        return list(items)
+
+    def gutter(group):
+        spans = sorted((key(it)[0], key(it)[2]) for it in group)
+        reach = spans[0][1]
+        for a, b in spans[1:]:
+            if a > reach + 0.002:
+                return (reach + a) / 2
+            reach = max(reach, b)
+        return None
+
+    g = gutter(items)
+    if g is not None:
+        left = [it for it in items if key(it)[0] < g]
+        right = [it for it in items if key(it)[0] >= g]
+        return reading_order(left, key) + reading_order(right, key)
+
+    gx0 = min(key(it)[0] for it in items)
+    gx1 = max(key(it)[2] for it in items)
+    wide = [it for it in items if key(it)[2] - key(it)[0] > 0.5 * (gx1 - gx0)]
+    narrow = [it for it in items if it not in wide]
+    if wide and narrow and gutter(narrow) is not None:
+        out, rest = [], sorted(narrow, key=lambda it: key(it)[1])
+        for w in sorted(wide, key=lambda it: key(it)[1]):
+            above = [it for it in rest if (key(it)[1] + key(it)[3]) / 2 < (key(w)[1] + key(w)[3]) / 2]
+            rest = [it for it in rest if it not in above]
+            out += reading_order(above, key) + [w]
+        return out + reading_order(rest, key)
+
+    return sorted(items, key=lambda it: (key(it)[1], key(it)[0]))

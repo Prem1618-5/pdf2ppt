@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image
 
 from . import imaging
-from .assemble import Fragment, assemble
+from .assemble import Fragment, assemble, reading_order
 from .deck import Q1, DeckBuilder, rebuild_fits
 from .ingest import count_pages, dhash, iter_pages
 from .layout_classical import ClassicalLayout
@@ -109,7 +109,12 @@ def run_job(paths, out_dir, settings, options=None, progress=lambda *a: None, lo
         p["model"] = lay.get("_model")
         page_notes.append({"page": p["ref"], "kind": lay.get("page_kind"), "model": lay.get("_model"),
                            "duplicate_of": pages[p["dup_of"]]["ref"] if p["dup_of"] is not None else None})
-        raw = sorted(lay.get("fragments", []), key=lambda f: f.get("order", 0))
+        raw = [f for f in lay.get("fragments", []) if _box(f.get("box", [])) is not None]
+        # geometric reading order for content; clutter/headers keep their own position
+        content = [f for f in raw if f.get("role") in KEEP_ROLES + ("solution", "answer_key")]
+        for k, f in enumerate(reading_order(content, key=lambda f: _box(f["box"]))):
+            f["order"] = k
+        raw = content + [f for f in raw if f not in content]
         boxes = [_box(f.get("box", [])) for f in raw]
         for i, (f, box) in enumerate(zip(raw, boxes)):
             if box is None or f.get("role") not in KEEP_ROLES:

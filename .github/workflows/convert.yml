@@ -1,6 +1,6 @@
 # Solution 3 ("no always-on server"): run a conversion inside GitHub Actions.
 # Trigger manually with a public/presigned URL of the paper; the deck comes back as a
-# workflow artifact (auto-expires after 1 day). GEMINI_API_KEY lives in repo secrets.
+# workflow artifact (auto-expires after 1 day). GEMINI_API_KEYS (one or many) lives in repo secrets.
 name: convert-paper
 on:
   workflow_dispatch:
@@ -32,7 +32,7 @@ jobs:
           PY
       - name: Convert
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEYS: ${{ secrets.GEMINI_API_KEYS }}
           WM: ${{ inputs.watermark }}
         run: python cli.py in/* -o out --watermark "$WM"
       - uses: actions/upload-artifact@v4

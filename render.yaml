@@ -1,4 +1,4 @@
-# Render Blueprint (free web service). Set GEMINI_API_KEY in the dashboard (sync: false).
+# Render Blueprint (free web service). Set GEMINI_API_KEYS in the dashboard (sync: false).
 services:
   - type: web
     name: qpaper-slides
@@ -6,11 +6,11 @@ services:
     plan: free
     healthCheckPath: /healthz
     envVars:
-      - key: GEMINI_API_KEY
+      - key: GEMINI_API_KEYS
         sync: false
       - key: PAGES_PER_CALL
         value: "3"
       - key: GEMINI_WORKERS
         value: "2"
       - key: JOB_TTL_MIN
-        value: "60"
+        value: "360"

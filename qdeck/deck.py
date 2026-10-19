@@ -1,6 +1,5 @@
 """PowerPoint writer. 16:9, white, one question per slide in Quadrant 1 (top-right).
 Repeated decoration (cross-hair axes, background) lives on the slide master only."""
-import copy
 import io
 
 from lxml import etree
@@ -25,33 +24,19 @@ DEVANAGARI_FONT = "Nirmala UI"   # Windows 8+; PowerPoint falls back to Mangal o
 LATIN_FONT = "Arial"
 
 
-def _new_presentation(theme, axes):
+MARGIN = 0.3
+FULL = (MARGIN, MARGIN, SLIDE_W - 2 * MARGIN, SLIDE_H - 2 * MARGIN)
+MAX_PT = 36          # never blow a short question up beyond ~36 pt type
+
+
+def _new_presentation(theme):
     prs = Presentation()
     prs.slide_width = Inches(SLIDE_W)
     prs.slide_height = Inches(SLIDE_H)
     blank = prs.slide_layouts[6]
-    master = prs.slide_master
-    t = THEMES[theme]
-    # background on the master
-    bg = master.background.fill
+    bg = prs.slide_master.background.fill
     bg.solid()
-    bg.fore_color.rgb = t["bg"]
-    if axes:
-        tmp = prs.slides.add_slide(blank)
-        lines = [
-            tmp.shapes.add_connector(1, Inches(SLIDE_W / 2), Inches(0), Inches(SLIDE_W / 2), Inches(SLIDE_H)),
-            tmp.shapes.add_connector(1, Inches(0), Inches(SLIDE_H / 2), Inches(SLIDE_W), Inches(SLIDE_H / 2)),
-        ]
-        sp_tree = master.shapes._spTree
-        for ln in lines:
-            ln.line.color.rgb = t["axis"]
-            ln.line.width = Pt(0.75)
-            ln.line.dash_style = 4  # dash
-            sp_tree.append(copy.deepcopy(ln._element))
-        # drop the temporary slide
-        sld_id = prs.slides._sldIdLst[-1]
-        prs.part.drop_rel(sld_id.rId)
-        prs.slides._sldIdLst.remove(sld_id)
+    bg.fore_color.rgb = THEMES[theme]["bg"]
     return prs, blank
 
 
@@ -68,35 +53,53 @@ def _set_fonts(run, size_pt, color, bold=False):
         el.set("typeface", face)
 
 
-def rebuild_fits(label, stem, options):
-    """Largest font (pt) at which the rebuilt text fits Quadrant 1, or None."""
+def rebuild_fits(label, stem, options, box=Q1):
+    """Largest font (pt) at which the rebuilt text fits the box, or None."""
     paras = [f"{label} {stem}"] + [f"({chr(97 + i)}) {o}" for i, o in enumerate(options)]
-    for size in range(28, MIN_REBUILD_PT - 1, -1):
-        cpl = Q1[2] * 72 / (0.55 * size)  # characters per line (average glyph width ~0.55 em)
+    for size in range(40, MIN_REBUILD_PT - 1, -1):
+        cpl = box[2] * 72 / (0.55 * size)  # characters per line (average glyph width ~0.55 em)
         lines = sum(max(1, -(-len(p) // int(cpl))) for p in paras)
-        if lines * size * 1.25 / 72 + 0.15 <= Q1[3]:
+        if lines * size * 1.25 / 72 + 0.15 <= box[3]:
             return size
     return None
 
 
 class DeckBuilder:
-    def __init__(self, theme="light", axes=True):
-        self.theme = theme
-        self.prs, self.layout = _new_presentation(theme, axes)
-        self.t = THEMES[theme]
+    """layout "fill": the question uses the whole slide (centred, top-aligned);
+    layout "top-right": the v1 quadrant placement. No axes, no quadrant lines."""
 
-    def add_snapshot(self, img_bytes, px_size, notes):
+    def __init__(self, theme="light", layout="fill"):
+        self.theme = theme
+        self.prs, self.layout = _new_presentation(theme)
+        self.t = THEMES[theme]
+        self.box = FULL if layout == "fill" else Q1
+        self.centre = layout == "fill"
+
+    def add_snapshot(self, img_bytes, px_size, notes, src_w_in=None, glyph_pt=None):
+        """Place a question picture; returns the estimated font size on the slide."""
         s = self.prs.slides.add_slide(self.layout)
+        L, T, BW, BH = self.box
         w_px, h_px = px_size
-        scale = min(Q1[2] / w_px, Q1[3] / h_px)
+        scale = min(BW / w_px, BH / h_px)
         w_in, h_in = w_px * scale, h_px * scale
-        s.shapes.add_picture(io.BytesIO(img_bytes), Inches(Q1[0]), Inches(Q1[1]), Inches(w_in), Inches(h_in))
+        disp = None
+        if src_w_in and glyph_pt:
+            disp = glyph_pt / 0.52 * (w_in / src_w_in)
+            if disp > MAX_PT:                       # short question: don't make it gigantic
+                f = MAX_PT / disp
+                w_in, h_in, disp = w_in * f, h_in * f, MAX_PT
+        left = L + (BW - w_in) / 2 if self.centre else L
+        s.shapes.add_picture(io.BytesIO(img_bytes), Inches(left), Inches(T), Inches(w_in), Inches(h_in))
         self._notes(s, notes)
-        return w_in, h_in
+        return round(disp, 1) if disp else None
+
+    def add_blank(self):
+        """Empty slide for the teacher's working."""
+        self.prs.slides.add_slide(self.layout)
 
     def add_rebuilt(self, label, stem, options, size_pt, notes):
         s = self.prs.slides.add_slide(self.layout)
-        tb = s.shapes.add_textbox(Inches(Q1[0]), Inches(Q1[1]), Inches(Q1[2]), Inches(Q1[3]))
+        tb = s.shapes.add_textbox(Inches(self.box[0]), Inches(self.box[1]), Inches(self.box[2]), Inches(self.box[3]))
         tf = tb.text_frame
         tf.word_wrap = True
         tf.vertical_anchor = MSO_ANCHOR.TOP
@@ -116,14 +119,6 @@ class DeckBuilder:
             r.text = f"({chr(97 + i)}) {o}"
             _set_fonts(r, size_pt, self.t["fg"])
         self._notes(s, notes)
-
-    def add_caption(self, text):
-        """Tiny reference line under the question, still inside Quadrant 1."""
-        s = self.prs.slides[-1]
-        tb = s.shapes.add_textbox(Inches(Q1[0]), Inches(SLIDE_H / 2 - INSET - 0.3), Inches(Q1[2]), Inches(0.28))
-        r = tb.text_frame.paragraphs[0].add_run()
-        r.text = text
-        _set_fonts(r, 11, RGBColor(0x66, 0x66, 0x66))
 
     @staticmethod
     def _notes(slide, notes):

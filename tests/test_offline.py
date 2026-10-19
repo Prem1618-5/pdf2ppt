@@ -70,12 +70,18 @@ def test_electrician_without_llm(tmp_path):
     res = run_job([pdf], str(tmp_path / "out"), s)
     assert res["slides"] == 75 and res["integrity"]["ok"]
     prs = Presentation(res["pptx"])
-    assert len(prs.slides) == 75
+    assert len(prs.slides) == 150                        # question + blank working slide
     assert abs(prs.slide_width - Emu(int(13.333 * 914400))) < 2000
-    for slide in prs.slides:
-        for sh in slide.shapes:   # every picture stays inside Quadrant 1
-            assert sh.left >= int(SLIDE_W / 2 * 914400) and sh.top + sh.height <= int(SLIDE_H / 2 * 914400) + 10
-            assert sh.left + sh.width <= int(SLIDE_W * 914400) + 10
-    # axes live on the master, not on slides
-    assert len(prs.slide_master.shapes) >= 2
+    emu = 914400
+    for i, slide in enumerate(prs.slides):
+        if i % 2:
+            assert len(slide.shapes) == 0                # blank slide for the teacher
+            continue
+        assert len(slide.shapes) == 1
+        sh = slide.shapes[0]                             # picture inside the slide margins
+        assert sh.left >= int(0.29 * emu) and sh.top >= int(0.29 * emu)
+        assert sh.left + sh.width <= int((SLIDE_W - 0.29) * emu) and sh.top + sh.height <= int((SLIDE_H - 0.29) * emu)
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+    # no cross-hair axes / quadrant lines anywhere: the master holds only its placeholders
+    assert all(sh.shape_type == MSO_SHAPE_TYPE.PLACEHOLDER for sh in prs.slide_master.shapes)
     assert os.path.getsize(res["pptx"]) < 15 * 1024 * 1024

@@ -16,6 +16,8 @@ import time
 
 import requests
 
+from .keypool import KeyPool, NoLane, mask
+
 PROMPT_VERSION = "v5"
 API = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
@@ -82,29 +84,16 @@ class QuotaExhausted(Exception):
 
 
 class GeminiLayout:
-    def __init__(self, settings, log=print):
+    def __init__(self, settings, log=print, keys=None):
         self.s = settings
         self.log = log
         self.models = list(settings.model_list)
-        self.dead_models = set()
+        self.pool = KeyPool(keys if keys else settings.key_list, self.models, settings.gemini_rpm)
         self.lock = threading.Lock()
-        self.last_calls = []
         self.calls = 0
         self.only_lite = False
         self.cache_hits = 0
         os.makedirs(os.path.join(settings.cache_dir, "layout"), exist_ok=True)
-
-    # -- throttle: at most `gemini_rpm` requests in any 60 s window ------------------
-    def _throttle(self):
-        while True:
-            with self.lock:
-                now = time.time()
-                self.last_calls = [t for t in self.last_calls if now - t < 60]
-                if len(self.last_calls) < max(1, self.s.gemini_rpm):
-                    self.last_calls.append(now)
-                    return
-                wait = 60 - (now - self.last_calls[0]) + 0.1
-            time.sleep(wait)
 
     def _cache_path(self, jpeg):
         h = hashlib.sha256(jpeg + PROMPT_VERSION.encode()).hexdigest()
@@ -134,8 +123,8 @@ class GeminiLayout:
                 todo.append(i)
         if not todo:
             return results
-        if not self.s.gemini_api_key:
-            raise QuotaExhausted("no GEMINI_API_KEY configured")
+        if not len(self.pool):
+            raise QuotaExhausted("no Gemini API key configured")
         if soft and len(soft) == len(todo):
             try:
                 return self._fresh(jpegs, todo, results, better_only=True)
@@ -179,70 +168,57 @@ class GeminiLayout:
         return results
 
     def _call(self, parts, better_only=False):
+        """Send one request through the key pool. Rotates keys/models on 429/503,
+        waits when every lane is only cooling, gives up when every lane is dead."""
         gen = {"responseMimeType": "application/json", "responseSchema": SCHEMA,
                "temperature": 0, "maxOutputTokens": 60000, "thinkingConfig": {"thinkingLevel": "low"}}
-        body = {"contents": [{"parts": parts}], "generationConfig": gen}
-        last_err = None
-        for rnd in range(1 if better_only else 4):   # 503 storms are transient: go round again
-            out = self._call_round(body, gen, better_only)
-            if isinstance(out, dict):
-                return out
-            last_err = out[1]
-            if out[0] == "dead":
-                break
-            self.log(f"all models busy; retrying in {30 * (rnd + 1)}s")
-            time.sleep(30 * (rnd + 1))
-        raise QuotaExhausted(last_err or "all models exhausted")
-
-    def _call_round(self, body, gen, better_only=False):
-        last_err, busy = None, False
-        for model in self.models:
-            if model in self.dead_models or (better_only and "lite" in model):
+        no_thinking = set()
+        last_err, waited, bad_json = None, 0.0, 0
+        deadline = time.time() + (120 if better_only else 1800)
+        while time.time() < deadline:
+            try:
+                key, model = self.pool.acquire(better_only=better_only)
+            except NoLane as e:
+                raise QuotaExhausted(f"{e}; last error: {last_err}")
+            if key is None:                      # everything is cooling: wait it out
+                wait = min(max(model, 1.0), 90.0)
+                if better_only and wait > 30:
+                    raise QuotaExhausted("better models busy")
+                self.log(f"all keys busy; waiting {wait:.0f}s")
+                time.sleep(wait)
+                waited += wait
                 continue
-            gen_m = dict(gen)
-            for attempt in range(5):
-                self._throttle()
-                body["generationConfig"] = gen_m
+            g = {k: v for k, v in gen.items() if not (k == "thinkingConfig" and model in no_thinking)}
+            body = {"contents": [{"parts": parts}], "generationConfig": g}
+            try:
+                r = requests.post(API.format(model=model), json=body, timeout=420,
+                                  headers={"x-goog-api-key": key})
+            except requests.RequestException as e:
+                last_err = f"network: {type(e).__name__}"
+                self.pool.report(key, model, 503, "")
+                time.sleep(2 + random.random() * 3)
+                continue
+            if r.status_code == 400 and "thinking" in r.text.lower() and model not in no_thinking:
+                no_thinking.add(model)
+                continue
+            outcome = self.pool.report(key, model, r.status_code, r.text)
+            if r.status_code == 200:
                 try:
-                    r = requests.post(API.format(model=model), json=body, timeout=420,
-                                      headers={"x-goog-api-key": self.s.gemini_api_key})
-                except requests.RequestException as e:
-                    last_err = str(e)
-                    time.sleep(min(60, 2 ** attempt + random.random()))
+                    j = r.json()
+                    out = json.loads(j["candidates"][0]["content"]["parts"][-1]["text"])
+                except Exception as e:          # truncated / blocked output
+                    bad_json += 1
+                    last_err = f"{model}: unreadable response ({type(e).__name__})"
+                    if bad_json >= 3:
+                        raise QuotaExhausted(last_err)
                     continue
-                if r.status_code == 200:
-                    try:
-                        j = r.json()
-                        text = j["candidates"][0]["content"]["parts"][-1]["text"]
-                        out = json.loads(text)
-                    except Exception as e:  # truncated / blocked output
-                        last_err = f"{model}: bad response: {e}"
-                        self.log(last_err)
-                        continue
+                with self.lock:
                     self.calls += 1
-                    out["_model"] = model
-                    return out
-                msg = r.text
-                last_err = f"{model}: HTTP {r.status_code} {msg[:200]}"
-                if r.status_code == 400 and "thinking" in msg.lower() and "thinkingConfig" in gen_m:
-                    gen_m = {k: v for k, v in gen_m.items() if k != "thinkingConfig"}
-                    continue
-                if r.status_code in (400, 403, 404):
-                    self.log(f"model {model} unusable (HTTP {r.status_code}); trying next")
-                    self.dead_models.add(model)
-                    break
-                if r.status_code == 429:
-                    if "PerDay" in msg or "per day" in msg.lower() or "limit: 0" in msg:
-                        self.log(f"daily free-tier quota used up on {model}; switching model")
-                        self.dead_models.add(model)
-                        break
-                    delay = min(90, 5 * 2 ** attempt) + random.random() * 3
-                    self.log(f"rate limited on {model}; waiting {delay:.0f}s")
-                    time.sleep(delay)
-                    continue
-                if r.status_code in (500, 502, 503, 504) and attempt >= 1:
-                    self.log(f"{model} overloaded (HTTP {r.status_code}); trying next model")
-                    busy = True
-                    break
-                time.sleep(min(30, 3 * 2 ** attempt + random.random()))
-        return ("busy" if busy else "dead", last_err)
+                out["_model"] = model
+                return out
+            last_err = f"{model}: HTTP {r.status_code}"
+            if outcome in ("exhausted", "invalid", "missing"):
+                self.log(f"key {mask(key)} / {model}: {outcome}; switching")
+            elif outcome == "busy":
+                self.log(f"{model} overloaded (503); trying another model")
+        raise QuotaExhausted(last_err or "timed out waiting for a free key")

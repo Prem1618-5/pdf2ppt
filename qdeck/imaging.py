@@ -81,8 +81,8 @@ def snap(img, core):
         b = min(H, top + ys.max() + 1 + margin)
         l = max(0, left + xs.min() - margin)
         r = min(W, left + xs.max() + 1 + margin)
-        return img.crop((l, t, r, b)), l
-    return img.crop((left, top, right, bot)), left
+        return img.crop((l, t, r, b)), (l, t, r, b)
+    return img.crop((left, top, right, bot)), (left, top, right, bot)
 
 
 def is_dark(img):
@@ -184,10 +184,10 @@ def tighten(img):
     The left edge is never cut, so the printed question number stays visible."""
     H, W = img.height, img.width
     if H < 20 or W < 20:
-        return img, 0
+        return img, (0, 0, W, H)
     c = content_mask(img)
     if c.sum() < 50:
-        return img, 0
+        return img, (0, 0, W, H)
     cols = c.sum(axis=0) > 0
     xs = np.where(cols)[0]
     right = xs.max() + 1
@@ -206,10 +206,10 @@ def tighten(img):
     xs = np.where(c[:, :right].sum(axis=0) > 0)[0]
     ys = np.where(c[:, :right].sum(axis=1) > 0)[0]
     if not len(xs) or not len(ys):
-        return img, 0
+        return img, (0, 0, W, H)
     mg = 8
-    l = max(0, xs.min() - mg)
-    return img.crop((l, max(0, ys.min() - mg), min(W, xs.max() + 1 + mg), min(H, ys.max() + 1 + mg))), l
+    rect = (max(0, xs.min() - mg), max(0, ys.min() - mg), min(W, xs.max() + 1 + mg), min(H, ys.max() + 1 + mg))
+    return img.crop(rect), rect
 
 
 def content_mask(img):
@@ -236,3 +236,32 @@ def compress_gaps(img, ppi, max_gap_in=0.12):
         return img
     a = np.asarray(img)
     return Image.fromarray(a[keep])
+
+
+def strip_rules(img):
+    """Erase table rules: vertical lines taller than ~55% of the crop and horizontal
+    lines wider than ~75% (cell borders around a question). Short lines such as
+    underlines, fraction bars and figure frames are kept."""
+    g = np.asarray(img.convert("L"))
+    H, W = g.shape
+    if H < 30 or W < 30:
+        return img
+    m = (cv2.adaptiveThreshold(g, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 35, 18) > 0).astype(np.uint8)
+    vert = cv2.morphologyEx(m, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, int(H * 0.55))))
+    horiz = cv2.morphologyEx(m, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (int(W * 0.75), 1)))
+    rules = cv2.dilate(vert | horiz, np.ones((3, 3), np.uint8)) > 0
+    if not rules.any():
+        return img
+    a = np.asarray(img.convert("RGB")).copy()
+    a[rules] = 255
+    return Image.fromarray(a)
+
+
+def erase(img, rects):
+    """White out pixel rectangles (e.g. a duplicate question-ID column)."""
+    if not rects:
+        return img
+    a = np.asarray(img.convert("RGB")).copy()
+    for l, t, r, b in rects:
+        a[max(0, int(t)):max(0, int(b)), max(0, int(l)):max(0, int(r))] = 255
+    return Image.fromarray(a)

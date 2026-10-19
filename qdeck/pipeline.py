@@ -1,7 +1,7 @@
 """End-to-end job: pages -> layout (Gemini, classical fallback) -> crops -> questions
 -> pptx + QA report + manifest. Streams one page at a time; peak RAM stays small."""
-import json
 import os
+import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -10,12 +10,12 @@ from PIL import Image
 
 from . import imaging
 from .assemble import Fragment, assemble, reading_order
-from .refine import refine
-from .deck import Q1, DeckBuilder, rebuild_fits
 from .ingest import count_pages, dhash, iter_pages
 from .layout_classical import ClassicalLayout
 from .layout_gemini import GeminiLayout, QuotaExhausted
-from .report import _thumb, write_csv, write_html
+from .project import Project
+from .refine import refine
+from .watermark import strip_pdf_watermarks
 
 KEEP_ROLES = ("question", "continuation", "shared_passage")
 MIN_FONT_PT = 10      # below this on the slide the question is flagged "small_text"
@@ -29,13 +29,32 @@ def _box(b):
     return (x0, y0, x1, y1)
 
 
-def run_job(paths, out_dir, settings, options=None, progress=lambda *a: None, log=print):
+def run_job(paths, out_dir, settings, options=None, progress=lambda *a: None, log=print, keys=None,
+            on_pool=None):
+    """Analyse the inputs into an editable project (out_dir/project.json) and export
+    the first version of the deck + QA report from it."""
     t0 = time.time()
     opts = settings.job_options()
     opts.update(options or {})
     os.makedirs(out_dir, exist_ok=True)
     work = os.path.join(out_dir, "work")
+    pages_dir = os.path.join(out_dir, "pages")
     os.makedirs(work, exist_ok=True)
+    os.makedirs(pages_dir, exist_ok=True)
+    # watermark removal at the source: cleaned PDF copies are used for everything
+    srcs = []
+    for i, path in enumerate(paths):
+        if path.lower().endswith(".pdf") and opts["watermark"] == "remove":
+            clean = os.path.join(out_dir, "src", f"{i:02d}_{os.path.basename(path)}")
+            os.makedirs(os.path.dirname(clean), exist_ok=True)
+            try:
+                strip_pdf_watermarks(path, clean, log=log)
+                srcs.append(clean)
+                continue
+            except Exception as e:
+                log(f"watermark strip skipped for {os.path.basename(path)}: {type(e).__name__}")
+        srcs.append(path)
+    paths = srcs
     n_pages = count_pages(paths)
     progress("pages", 0, n_pages)
 
@@ -44,14 +63,16 @@ def run_job(paths, out_dir, settings, options=None, progress=lambda *a: None, lo
     hashes = []
     for seq, page in enumerate(iter_pages(paths)):
         jpeg, size = page.layout_jpeg(settings.layout_px)
-        jp = os.path.join(work, f"layout_{seq:04d}.jpg")
+        jp = os.path.join(pages_dir, f"{seq:04d}.jpg")
         with open(jp, "wb") as f:
             f.write(jpeg)
         h = dhash(Image.open(jp))
         dup_of = next((i for i, hh in enumerate(hashes) if np.count_nonzero(h != hh) <= 12), None)
         hashes.append(h)
         pages.append({"seq": seq, "ref": page.ref, "kind": page.kind, "jpeg": jp, "dup_of": dup_of,
-                      "lines": page.text_lines(), "figs": page.figure_boxes()})
+                      "lines": page.text_lines(), "figs": page.figure_boxes(), "src": page.file_name,
+                      "index": page.index, "w_in": page.width_in, "h_in": page.height_in,
+                      "thumb_w": size[0], "thumb_h": size[1]})
         progress("rendered", seq + 1, n_pages)
     classical = ClassicalLayout()
     classical.prime([p["lines"] for p in pages], [p["figs"] for p in pages])
@@ -64,7 +85,9 @@ def run_job(paths, out_dir, settings, options=None, progress=lambda *a: None, lo
         classical.prime([p["lines"] for p in pages], [p["figs"] for p in pages])
 
     # ---- pass 2b: vision-LLM layout for the rest (batched, parallel, cached) ----------
-    llm = GeminiLayout(settings, log=log) if settings.use_llm else None
+    llm = GeminiLayout(settings, log=log, keys=keys) if settings.use_llm else None
+    if llm is not None and on_pool:
+        on_pool(llm.pool)
     todo = [p for p in pages if layouts[p["seq"]] is None and p["dup_of"] is None]
     for p in pages:
         if p["dup_of"] is not None:
@@ -92,7 +115,8 @@ def run_job(paths, out_dir, settings, options=None, progress=lambda *a: None, lo
         progress("analysed", done[0], n_pages)
 
     if batches:
-        with ThreadPoolExecutor(max_workers=max(1, settings.gemini_workers)) as ex:
+        workers = max(1, min(len(batches), llm.pool.parallelism if llm else 1, max(settings.gemini_workers, 1) * 4))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
             list(ex.map(run_batch, batches))
 
     # ---- pass 3: crops (re-open pages one at a time) ----------------------------------
@@ -131,108 +155,65 @@ def run_job(paths, out_dir, settings, options=None, progress=lambda *a: None, lo
             pw, ph = pb[2] - pb[0], pb[3] - pb[1]
             core = ((box[0] - pb[0]) / pw * img.width, (box[1] - pb[1]) / ph * img.height,
                     (box[2] - pb[0]) / pw * img.width, (box[3] - pb[1]) / ph * img.height)
-            img, l1 = imaging.snap(img, core)
-            img, l2 = imaging.tighten(img)
-            left_in = pb[0] * page.width_in + (l1 + l2) / max(1e-6, _ppi(page, pb, settings.crop_dpi))
+            W0, H0 = img.size
+            snapped, r1 = imaging.snap(img, core)
+            _, r2 = imaging.tighten(snapped)
+            l, t = r1[0] + r2[0], r1[1] + r2[1]
+            r, b = r1[0] + r2[2], r1[1] + r2[3]
+            eff = (pb[0] + l / W0 * pw, pb[1] + t / H0 * ph, pb[0] + r / W0 * pw, pb[1] + b / H0 * ph)
             dark = bool(lay.get("dark_background")) or imaging.is_dark(img)
-            img = imaging.to_light(img, watermark=opts["watermark"], photo=page.kind != "pdf-digital",
-                                   screenshot=page.kind == "image")
-            cp = os.path.join(work, f"frag_{seq:04d}_{i:03d}.png")
-            img.save(cp)
-            fr = _frag(p, f, box, cp, i, lay)
+            fr = _frag(p, f, eff, "", i, lay)
             if "lite" in str(lay.get("_model", "")):
                 fr.confidence = min(fr.confidence, 0.5)   # lite models give rough boxes: review
             fr.dark = dark
             fr.watermark = bool(lay.get("watermark_present"))
+            fr._erase = f.get("erase") or []
             frags.append(fr)
-            fr._ppi = _ppi(page, pb, settings.crop_dpi)
-            fr._left_in = left_in
         progress("cropped", seq + 1, n_pages)
 
     # ---- assemble ---------------------------------------------------------------------
     questions, dropped, integrity = assemble(frags, lang_pref=opts["lang"], log=log)
     progress("building", 0, len(questions))
 
-    # ---- deck -------------------------------------------------------------------------
-    deck = DeckBuilder(theme=opts["theme"], axes=opts["axes"])
-    rows, thumbs, manifest = [], [], []
-    max_w_px = int(Q1[2] * settings.crop_dpi)
-    max_h_px = int(Q1[3] * settings.crop_dpi)
+    # ---- project (editable) ------------------------------------------------------------
+    items = []
     for q in questions:
-        parts = q.fragments
-        imgs = []
-        ppis = [getattr(f, "_ppi", settings.crop_dpi) for f in parts]
-        target_ppi = min(ppis)
-        for f, ppi in zip(parts, ppis):
-            im = Image.open(f.crop_path)
-            if ppi > target_ppi * 1.05:
-                s = target_ppi / ppi
-                im = im.resize((max(1, int(im.width * s)), max(1, int(im.height * s))), Image.LANCZOS)
-            imgs.append(im)
-        lefts = [getattr(f, "_left_in", 0.0) for f in parts]
-        aligned = max(lefts) - min(lefts) < 1.0   # same column position -> keep alignment
-        img = imaging.stack(imgs, offsets=[int((l - min(lefts)) * target_ppi) for l in lefts] if aligned else None)
-        if not (q.has("has_figure") or q.has("has_table") or q.passage):
-            img = imaging.compress_gaps(img, target_ppi)
-        scale = min(Q1[2] / (img.width / target_ppi), Q1[3] / (img.height / target_ppi))
-        glyph = imaging.text_height_pt(img, target_ppi)
-        if opts["theme"] == "dark":
-            from PIL import ImageOps
-            img = ImageOps.colorize(ImageOps.invert(img.convert("L")), black="#121418", white="#f2f2f2")
-        disp_pt = round(glyph / 0.52 * scale, 1) if glyph else None
+        parts = [{"page": f.page_seq, "box": [round(v, 5) for v in f.box]} for f in q.fragments]
+        erase = [{"page": f.page_seq, "box": e} for f in q.fragments for e in getattr(f, "_erase", [])]
+        flags = list(q.flags)
         if q.has("has_figure"):
-            q.flags.append("figure")
-        if any(f.watermark for f in parts):
-            q.flags.append("watermark_" + ("kept" if opts["watermark"] == "keep" else "removed"))
-        render = "snapshot"
+            flags.append("figure")
         plain = not (q.has("has_figure") or q.has("has_math") or q.has("has_table")) and q.passage is None
-        want_rebuild = opts["render"] == "rebuild" or (opts["render"] == "auto" and q.root.dark)
-        size = rebuild_fits(q.label, _stem(q), q.options) if (want_rebuild and plain and q.text) else None
-        notes = _notes(q, disp_pt)
-        if size:
-            deck.add_rebuilt(q.label, _stem(q), q.options, size, notes)
-            render = "rebuild"
-            disp_pt = size
-            data, fmt, px = imaging.encode(img, 400, 300)
-        else:
-            data, fmt, px = imaging.encode(img, max_w_px, max_h_px)
-            deck.add_snapshot(data, px, notes)
-            if disp_pt is not None and disp_pt < ILLEGIBLE_PT:
-                q.flags.append("too_small_to_read")
-            elif disp_pt is not None and disp_pt < MIN_FONT_PT:
-                q.flags.append("small_text")
-        if q.passage_slide_of:
-            deck.add_caption(f"Passage: see slide {q.passage_slide_of}")
-        pages_used = list(dict.fromkeys(f.page_ref for f in [q.root] + q.parts))
-        row = {"slide": q.slide_no, "label": q.label, "number": q.number, "section": q.section + 1,
-               "lang": q.lang, "pages": " + ".join(pages_used), "render": render,
-               "confidence": round(q.confidence, 2), "display_font_pt": disp_pt,
-               "flags": ";".join(dict.fromkeys(q.flags)), "text": q.text[:300]}
-        rows.append(row)
-        thumbs.append(_thumb(data))
-        manifest.append({**row, "fragments": [{"page": f.page_ref, "role": f.role, "box": f.box,
-                                               "crop": os.path.basename(f.crop_path)} for f in parts],
-                         "stem": _stem(q), "options": q.options})
-        progress("building", q.slide_no, len(questions))
-
-    base = os.path.join(out_dir, "questions")
-    deck.save(base + ".pptx")
-    summary = (f"{len(questions)} slides from {n_pages} pages in {time.time() - t0:.0f}s. "
+        stem = _stem(q)
+        render = "snapshot"
+        if stem and plain and (opts["render"] == "rebuild" or (opts["render"] == "auto" and q.root.dark)):
+            render = "text"
+        items.append({"id": f"q{q.slide_no:04d}", "label": q.label, "number": q.number, "lang": q.lang,
+                      "section": q.section + 1, "render": render, "stem": stem, "options": list(q.options),
+                      "parts": parts, "erase": erase, "flags": list(dict.fromkeys(flags)),
+                      "confidence": round(q.confidence, 2), "blank_after": None, "custom_image": False, "rev": 1})
+    summary = (f"{len(questions)} questions from {n_pages} pages in {time.time() - t0:.0f}s. "
                f"Excluded: {dropped['solutions']} solution/answer blocks, {dropped['twins']} other-language twins, "
-               f"{dropped['duplicates']} duplicates (repeated pages/photos), {dropped['orphans']} orphan fragments. "
+               f"{dropped['duplicates']} duplicates, {dropped['orphans']} orphan fragments. "
                f"Layout: {llm.calls if llm else 0} LLM calls, {llm.cache_hits if llm else 0} cache hits, "
                f"{sum(1 for p in pages if (p.get('model') or '').startswith('classical'))} pages via classical parser "
-               f"({sum(1 for p in pages if p.get('fallback'))} as quota fallback). "
-               f"Options: {json.dumps(opts)}")
-    write_csv(base + "_qa.csv", rows)
-    write_html(base + "_qa.html", ", ".join(os.path.basename(p) for p in paths), summary, integrity, rows, thumbs)
-    with open(base + "_manifest.json", "w", encoding="utf-8") as f:
-        json.dump({"options": opts, "integrity": integrity, "pages": page_notes, "questions": manifest},
-                  f, ensure_ascii=False, indent=1)
+               f"({sum(1 for p in pages if p.get('fallback'))} as quota fallback).")
+    page_meta = [{"seq": p["seq"], "ref": p["ref"], "kind": p["kind"], "src": os.path.abspath(p["src"]),
+                  "index": p["index"], "w_in": p["w_in"], "h_in": p["h_in"], "thumb": os.path.abspath(p["jpeg"]),
+                  "thumb_w": p["thumb_w"], "thumb_h": p["thumb_h"]} for p in pages]
+    settings_p = {"layout": opts.get("layout", "fill"), "blank_after": opts.get("blank_after", True),
+                  "watermark": opts["watermark"], "theme": opts.get("theme", "light")}
+    proj = Project.create(out_dir, page_meta, items, settings_p, integrity, summary)
+    for k, it in enumerate(proj.data["items"], 1):
+        proj.item_png(it["id"])
+        progress("building", k, len(questions))
+    pptx, n_slides = proj.export(out_dir)
+    shutil.rmtree(work, ignore_errors=True)
     log(summary)
-    return {"pptx": base + ".pptx", "qa_html": base + "_qa.html", "qa_csv": base + "_qa.csv",
-            "manifest": base + "_manifest.json", "integrity": integrity, "summary": summary,
-            "slides": len(questions)}
+    base = os.path.join(out_dir, "questions")
+    return {"pptx": pptx, "qa_html": base + "_qa.html", "qa_csv": base + "_qa.csv",
+            "project": os.path.join(out_dir, "project.json"), "integrity": integrity, "summary": summary,
+            "slides": len(questions), "pptx_slides": n_slides}
 
 
 def _classical_digital(paths, pages, layouts, classical, log):
@@ -257,13 +238,6 @@ def _classical_digital(paths, pages, layouts, classical, log):
             log(f"{os.path.basename(path)}: text layer parsed without LLM ({len(nums)} questions, numbering complete)")
         else:
             log(f"{os.path.basename(path)}: classical parse incomplete; using the vision LLM")
-
-
-def _ppi(page, pb, crop_dpi):
-    if page.kind == "image":
-        src_ppi = page.img.width / page.width_in if page.img is not None else crop_dpi
-        return min(crop_dpi, src_ppi)
-    return crop_dpi
 
 
 def _script_lang(text, fallback):
@@ -317,16 +291,3 @@ def _stem(q):
             q.root.options = opts
             return " ".join(stem)
     return " ".join(lines)
-
-
-def _notes(q, disp_pt):
-    pages = ", ".join(dict.fromkeys(f.page_ref for f in [q.root] + q.parts))
-    lines = [f"Q {q.label} | source: {pages} | confidence {q.confidence:.2f}"
-             + (f" | est. font on slide {disp_pt} pt" if disp_pt else "")]
-    if q.flags:
-        lines.append("flags: " + ", ".join(dict.fromkeys(q.flags)))
-    if q.text:
-        lines.append(q.text[:1500])
-    for i, o in enumerate(q.options):
-        lines.append(f"({chr(97 + i)}) {o}")
-    return "\n".join(lines)

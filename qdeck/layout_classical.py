@@ -130,13 +130,15 @@ class ClassicalLayout:
                 continue
             left = min(l[0] for l in col_lines)
             anchors = []
+            qid_cols = []
             for l in col_lines:
                 m = ANCHOR.match(l[4])
                 if not m or l[0] > left + 0.05 or INSTRUCTION_WORDS.search(l[4]):
                     continue
                 n = int(m.group(1))
                 if anchors and abs(anchors[-1][0][1] - l[1]) < 0.004:
-                    continue  # second number cell on the same row (e.g. QID column)
+                    qid_cols.append((l[0], l[2]))   # second number cell on the row: QID column
+                    continue
                 exp = self.expected_next
                 if exp is None or n == exp or (0 < n - exp <= 3) or n == 1:
                     anchors.append((l, n))
@@ -162,7 +164,11 @@ class ClassicalLayout:
                 for f in col_figs:
                     if ys <= f[1] < ye:
                         y1 = max(y1, f[3])
-                frags.append(self._frag("question", str(n), cx0, l[1], cx1, y1, body, col_figs, number=n))
+                fr = self._frag("question", str(n), cx0, l[1], cx1, y1, body, col_figs, number=n)
+                if qid_cols:   # hide the duplicate question-ID column, keep the serial number
+                    qx0, qx1 = min(q[0] for q in qid_cols), max(q[1] for q in qid_cols)
+                    fr["erase"] = [[qx0 - 0.004, l[1] - 0.01, qx1 + 0.004, y1 + 0.01]]
+                frags.append(fr)
         self.had_question = self.had_question or any(f["role"] == "question" for f in frags)
         if frags and frags[-1]["role"] == "question":
             frags[-1]["continues_on_next"] = True  # unknown: the next page decides

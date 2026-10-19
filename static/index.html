@@ -4,146 +4,205 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Question Paper to Slides</title>
-<style>
-  body { margin: 0; background: #f6f7f9; color: #1a1a1a; font: 16px Arial, Helvetica, sans-serif; }
-  .wrap { max-width: 720px; margin: 0 auto; padding: 24px 16px 48px; }
-  h1 { font-size: 24px; margin: 0 0 4px; }
-  .sub { color: #555; margin: 0 0 20px; }
-  .card { background: #fff; border: 1px solid #dde1e6; border-radius: 8px; padding: 20px; margin-bottom: 16px; }
-  label.drop { display: block; border: 2px dashed #9aa5b1; border-radius: 8px; padding: 28px 12px; text-align: center; cursor: pointer; background: #fbfcfd; }
-  label.drop:hover { border-color: #2457c5; }
-  input[type=file] { display: none; }
-  .files { margin-top: 10px; color: #333; font-size: 14px; }
-  .row { margin: 12px 0; }
-  .row b { display: inline-block; min-width: 150px; }
-  select { font-size: 15px; padding: 4px; }
-  button { font-size: 17px; padding: 10px 22px; border: 0; border-radius: 6px; background: #2457c5; color: #fff; cursor: pointer; }
-  button[disabled] { background: #9aa5b1; cursor: default; }
-  .bar { height: 14px; background: #e6e9ee; border-radius: 7px; overflow: hidden; margin: 10px 0; }
-  .bar div { height: 100%; width: 0; background: #2457c5; }
-  .muted { color: #666; font-size: 14px; }
-  .ok { color: #11772d; font-weight: bold; } .bad { color: #b00020; font-weight: bold; }
-  a.btn { display: inline-block; margin: 6px 8px 6px 0; padding: 10px 18px; border-radius: 6px; background: #11772d; color: #fff; text-decoration: none; }
-  a.sec { background: #fff; color: #2457c5; border: 1px solid #2457c5; }
-  .hidden { display: none; }
-</style>
+<link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
-<div class="wrap">
-  <h1>Question Paper &rarr; Slides</h1>
-  <p class="sub">Upload a question paper (PDF or photos). You get a PowerPoint with one question per slide, placed in the top-right corner so you have space to write.</p>
 
-  <div class="card" id="formCard">
-    <label class="drop" for="files">Click here to choose PDF / image files<br><span class="muted">You can pick several pages; they are used in the order chosen.</span></label>
-    <input type="file" id="files" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff">
-    <div class="files" id="fileList"></div>
-    <div class="row"><b>Watermark</b>
-      <select id="watermark"><option value="keep">Keep (as in the paper)</option><option value="remove">Remove</option></select></div>
-    <div class="row"><b>Centre lines</b>
-      <select id="axes"><option value="on">Show faint cross</option><option value="off">Hide</option></select></div>
-    <div class="row"><b>Language</b>
-      <select id="lang"><option value="en">English (if printed twice)</option><option value="hi">Hindi (if printed twice)</option><option value="both">Both</option></select></div>
-    <div class="row"><b>Question style</b>
-      <select id="render"><option value="auto">Automatic</option><option value="snapshot">Always picture of the question</option><option value="rebuild">Retype plain-text questions</option></select></div>
-    <button id="go" disabled>Make slides</button>
-    <p class="muted">Files are deleted from the server after processing. Results are deleted after one hour.</p>
+<!-- ============ 1. UPLOAD ============ -->
+<section id="scrUpload" class="screen">
+  <div class="wrap">
+    <h1>Question Paper &rarr; Slides</h1>
+    <p class="sub">Upload a question paper (PDF or photos of the pages). You get a PowerPoint with one question per slide, which you can check and fix here before downloading.</p>
+
+    <div class="card">
+      <label class="drop" for="fileInput">
+        <span class="drop-big">Click here to choose the PDF or picture files</span><br>
+        <span class="muted">You can choose several files. They are used in the order shown below.</span>
+      </label>
+      <input type="file" id="fileInput" class="file-hidden" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff">
+      <ol id="fileList" class="file-list"></ol>
+      <p id="fileClearRow" class="hidden"><button type="button" class="btn small sec" id="fileClear">Remove all files</button></p>
+
+      <div class="row">
+        <label class="row-label" for="optLang">Language when printed twice</label>
+        <select id="optLang">
+          <option value="en">English</option>
+          <option value="hi">Hindi</option>
+          <option value="both">Both</option>
+        </select>
+      </div>
+      <div class="row">
+        <label class="row-label" for="optRender">Question style</label>
+        <select id="optRender">
+          <option value="auto">Automatic</option>
+          <option value="snapshot">Picture of the question</option>
+          <option value="rebuild">Retype plain text questions</option>
+        </select>
+      </div>
+
+      <div class="keys-panel">
+        <button type="button" class="link-btn" id="keysToggle">&#9656; Gemini API keys (optional)</button>
+        <div id="keysBody" class="hidden">
+          <p class="muted">Add as many keys as you have. When one key reaches its free limit the next one is used automatically. Keys from different Google projects give more free requests (keys in the same project share one limit).</p>
+          <textarea id="keysText" rows="4" spellcheck="false" placeholder="One key per line"></textarea>
+          <div class="keys-actions">
+            <button type="button" class="btn sec" id="keysCheck">Check keys</button>
+            <label class="check"><input type="checkbox" id="keysRemember"> Remember keys on this computer</label>
+          </div>
+          <ul id="keysResult" class="keys-result"></ul>
+        </div>
+      </div>
+
+      <div class="go-row">
+        <button type="button" class="btn big" id="goBtn" disabled>Make slides</button>
+      </div>
+      <p class="muted">Files are deleted from the server after processing. Results are deleted after a while, so download your PowerPoint when you are happy with it.</p>
+    </div>
+
+    <div class="card">
+      <button type="button" class="btn sec" id="importBtn">Open an existing deck (.pptx) to edit</button>
+      <input type="file" id="importInput" class="file-hidden" accept=".pptx">
+      <span class="muted">&nbsp;A deck made by this tool, or any deck with one picture per slide.</span>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 2. PROGRESS ============ -->
+<section id="scrProgress" class="screen hidden">
+  <div class="wrap">
+    <h1>Making your slides&hellip;</h1>
+    <div class="card">
+      <div id="progStage" class="prog-stage">Uploading&hellip;</div>
+      <div class="bar"><div id="progBar"></div></div>
+      <div id="progDetail" class="muted"></div>
+      <table id="progKeys" class="key-table hidden">
+        <thead><tr><th>Key</th><th>State</th><th>Requests used</th></tr></thead>
+        <tbody id="progKeysBody"></tbody>
+      </table>
+      <div id="progError" class="hidden">
+        <p class="bad" id="progErrorText"></p>
+        <button type="button" class="btn" id="progBack">Back to start</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 3. EDITOR ============ -->
+<section id="scrEditor" class="screen hidden">
+  <div class="topbar">
+    <div class="topbar-row">
+      <div id="edSummary" class="summary"></div>
+      <div class="top-buttons">
+        <button type="button" class="btn sec" id="undoBtn" title="Undo (Ctrl+Z)">&#8630; Undo</button>
+        <button type="button" class="btn green" id="exportBtn">Download PowerPoint</button>
+        <button type="button" class="btn sec" id="reportBtn">QA report</button>
+        <button type="button" class="btn sec" id="restartBtn">Start over</button>
+      </div>
+    </div>
+    <div class="topbar-row settings">
+      <label class="check"><input type="checkbox" id="setBlank"> Blank slide after each question</label>
+      <span class="set-group">Question size:
+        <label class="radio"><input type="radio" name="setLayout" id="setLayoutFill" value="fill"> Fill slide</label>
+        <label class="radio"><input type="radio" name="setLayout" id="setLayoutTR" value="top-right"> Top-right corner</label>
+      </span>
+      <label class="check"><input type="checkbox" id="setWatermark"> Remove watermarks</label>
+    </div>
   </div>
 
-  <div class="card hidden" id="progressCard">
-    <div id="stage">Uploading&hellip;</div>
-    <div class="bar"><div id="barFill"></div></div>
-    <div class="muted" id="detail"></div>
-  </div>
+  <div class="editor">
+    <!-- slide list -->
+    <div class="pane-list">
+      <div class="pane-title">Slides <span class="muted">(drag to reorder)</span></div>
+      <div id="slideList" class="slide-list"></div>
+    </div>
 
-  <div class="card hidden" id="doneCard">
-    <div id="resultText"></div>
-    <p><a class="btn" id="dlPptx" href="#">Download slides (.pptx)</a>
-       <a class="btn sec" id="dlReport" href="#" target="_blank">Check report</a>
-       <a class="btn sec" id="dlCsv" href="#">Report (.csv)</a></p>
-    <p class="muted">Check the report for questions marked &ldquo;small_text&rdquo; or &ldquo;low_confidence&rdquo; before class.</p>
-    <button id="again">Convert another paper</button>
+    <!-- preview -->
+    <div class="pane-preview" id="previewPane">
+      <div id="frame" class="frame"></div>
+      <div class="preview-nav">
+        <button type="button" class="btn sec small" id="prevSlide">&#9650; Previous</button>
+        <span id="previewInfo"></span>
+        <button type="button" class="btn sec small" id="nextSlide">Next &#9660;</button>
+      </div>
+      <p class="muted center">Keyboard: Up / Down arrows to move, Delete to remove, Ctrl+Z to undo.</p>
+    </div>
+
+    <!-- item panel -->
+    <div class="pane-panel" id="panel">
+      <div id="panelEmpty"><p class="muted">Choose a slide on the left.</p><button type="button" class="btn sec" id="pAdd2">Add a missing question</button></div>
+      <div id="panelBody" class="hidden">
+        <label class="field-label" for="pLabel">Question number / label</label>
+        <input type="text" id="pLabel" class="wide">
+
+        <div class="field-label">Style</div>
+        <div class="toggle">
+          <button type="button" id="pRenderPic">Picture</button><button type="button" id="pRenderText">Text</button>
+        </div>
+
+        <div id="pTextBox" class="hidden">
+          <label class="field-label" for="pStem">Question text</label>
+          <textarea id="pStem" rows="5" class="wide"></textarea>
+          <div class="field-label">Options</div>
+          <div id="pOptions"></div>
+          <button type="button" class="btn small sec" id="pAddOpt">+ Add option</button>
+          <button type="button" class="btn small" id="pSaveText">Save text</button>
+        </div>
+
+        <label class="field-label" for="pBlank">Blank slide after this one</label>
+        <select id="pBlank" class="wide">
+          <option value="default">Default</option>
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+        </select>
+
+        <div id="pNotes" class="notes"></div>
+
+        <div class="panel-buttons">
+          <button type="button" class="btn" id="pCrop">Adjust crop</button>
+          <button type="button" class="btn sec" id="pReplace">Replace picture</button>
+          <input type="file" id="pReplaceInput" class="file-hidden" accept=".png,.jpg,.jpeg">
+          <button type="button" class="btn sec" id="pDup">Duplicate</button>
+          <button type="button" class="btn sec" id="pMerge">Merge with next</button>
+          <button type="button" class="btn danger" id="pDelete">Delete slide</button>
+          <button type="button" class="btn sec" id="pAdd">Add a missing question</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ CROP EDITOR (modal) ============ -->
+<div id="cropModal" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-head">
+      <b id="cropTitle">Adjust crop</b>
+      <span id="cropHelp" class="muted"></span>
+    </div>
+    <div class="crop-tools">
+      <button type="button" class="btn sec small" id="cropPrev">&#9664; Previous page</button>
+      <span id="cropPageInfo" class="page-info"></span>
+      <button type="button" class="btn sec small" id="cropNext">Next page &#9654;</button>
+      <button type="button" class="btn sec small" id="cropFit">Fit width</button>
+      <button type="button" class="btn danger small" id="cropRemove">Remove selected part</button>
+      <span id="cropLabelWrap" class="hidden">
+        <label for="cropLabel">Question number:</label>
+        <input type="text" id="cropLabel" size="6">
+      </span>
+    </div>
+    <div id="cropParts" class="crop-parts"></div>
+    <div id="cropStage" class="crop-stage">
+      <div id="cropPage" class="crop-page"><img id="cropImg" alt="" draggable="false"></div>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn sec" id="cropCancel">Cancel</button>
+      <button type="button" class="btn green" id="cropApply">Apply</button>
+    </div>
   </div>
 </div>
-<script>
-(function () {
-  var $ = function (id) { return document.getElementById(id); };
-  var files = $('files'), go = $('go'), jobId = null, timer = null;
-  var STAGES = { queued: 'Waiting in line', starting: 'Starting', pages: 'Reading pages', rendered: 'Reading pages',
-                 analysed: 'Finding the questions', cropped: 'Cutting out questions', building: 'Building slides', done: 'Done' };
 
-  files.onchange = function () {
-    var names = [];
-    for (var i = 0; i < files.files.length; i++) names.push(files.files[i].name);
-    $('fileList').innerHTML = names.length ? names.length + ' file(s): ' + names.join(', ').replace(/</g, '&lt;') : '';
-    go.disabled = names.length === 0;
-  };
+<div id="toast" class="toast hidden"></div>
+<div id="busy" class="busy hidden">Working&hellip;</div>
 
-  function show(id) {
-    var ids = ['formCard', 'progressCard', 'doneCard'];
-    for (var i = 0; i < ids.length; i++) $(ids[i]).className = 'card' + (ids[i] === id ? '' : ' hidden');
-  }
-  function bar(p) { $('barFill').style.width = Math.max(2, Math.min(100, p)) + '%'; }
-
-  go.onclick = function () {
-    var fd = new FormData();
-    for (var i = 0; i < files.files.length; i++) fd.append('files', files.files[i]);
-    fd.append('watermark', $('watermark').value); fd.append('axes', $('axes').value);
-    fd.append('lang', $('lang').value); fd.append('render', $('render').value);
-    show('progressCard'); $('stage').innerHTML = 'Uploading&hellip;';
-    var x = new XMLHttpRequest();
-    x.open('POST', '/api/jobs');
-    x.upload.onprogress = function (e) { if (e.lengthComputable) bar(e.loaded / e.total * 100); };
-    x.onload = function () {
-      if (x.status !== 200) { fail(x.responseText); return; }
-      jobId = JSON.parse(x.responseText).id; bar(0); poll();
-    };
-    x.onerror = function () { fail('Network error during upload.'); };
-    x.send(fd);
-  };
-
-  function poll() {
-    var x = new XMLHttpRequest();
-    x.open('GET', '/api/jobs/' + jobId + '?t=' + new Date().getTime());
-    x.onload = function () {
-      if (x.status !== 200) { fail(x.responseText); return; }
-      var s = JSON.parse(x.responseText);
-      if (s.state === 'done') { done(s); return; }
-      if (s.state === 'error') { fail(s.message); return; }
-      var weights = { rendered: [0, 10], analysed: [10, 60], cropped: [70, 20], building: [90, 10] };
-      var w = weights[s.stage];
-      if (w && s.n) bar(w[0] + w[1] * s.i / s.n);
-      $('stage').innerHTML = (STAGES[s.stage] || s.stage) + (s.n ? ' (' + s.i + ' / ' + s.n + ')' : '');
-      $('detail').innerHTML = s.queue_ahead ? s.queue_ahead + ' job(s) ahead of you' :
-        (s.log && s.log.length ? s.log[s.log.length - 1].replace(/</g, '&lt;') : 'This takes about 1 minute per 3 pages.');
-      timer = setTimeout(poll, 3000);
-    };
-    x.onerror = function () { timer = setTimeout(poll, 6000); };
-    x.send();
-  }
-
-  function done(s) {
-    show('doneCard');
-    var it = s.result.integrity;
-    $('resultText').innerHTML = '<p><b>' + s.result.slides + ' slides</b> created. Questions found: ' + it.detected +
-      ', expected from numbering: ' + it.expected + '. ' +
-      (it.ok ? '<span class="ok">Numbering complete.</span>' : '<span class="bad">Please check the report (gaps: ' +
-      (it.gaps.join(', ') || 'none') + ').</span>') + '</p>';
-    $('dlPptx').href = '/api/jobs/' + jobId + '/pptx';
-    $('dlReport').href = '/api/jobs/' + jobId + '/report';
-    $('dlCsv').href = '/api/jobs/' + jobId + '/csv';
-  }
-  function fail(msg) {
-    show('doneCard');
-    try { msg = JSON.parse(msg).detail || msg; } catch (e) {}
-    $('resultText').innerHTML = '<p class="bad">Something went wrong: ' + String(msg).replace(/</g, '&lt;') + '</p>';
-    $('dlPptx').className = 'hidden';
-  }
-  $('again').onclick = function () {
-    if (jobId) { var x = new XMLHttpRequest(); x.open('DELETE', '/api/jobs/' + jobId); x.send(); }
-    jobId = null; files.value = ''; $('fileList').innerHTML = ''; go.disabled = true;
-    $('dlPptx').className = 'btn'; show('formCard');
-  };
-})();
-</script>
+<script src="/static/app.js"></script>
 </body>
 </html>

@@ -20,6 +20,8 @@ def _env(name, default):
 @dataclass
 class Settings:
     gemini_api_key: str = field(default_factory=lambda: _env("GEMINI_API_KEY", ""))
+    # Any number of keys (newline / comma separated). Used when a job brings none.
+    gemini_api_keys: str = field(default_factory=lambda: _env("GEMINI_API_KEYS", ""))
     # First model that answers wins; later ones are used on 404 / quota exhaustion.
     gemini_models: str = field(default_factory=lambda: _env(
         "GEMINI_MODELS", "gemini-3.8-flash,gemini-3-flash-preview,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite"))
@@ -36,8 +38,9 @@ class Settings:
     use_llm: bool = field(default_factory=lambda: _env("USE_LLM", True))
 
     # Output options (also settable per job from the web form)
-    watermark: str = "keep"          # keep | remove
-    axes: bool = True                # faint cross-hair on the slide master
+    watermark: str = "remove"        # remove | keep  (v2: no watermark in output by default)
+    layout: str = "fill"             # fill (whole slide) | top-right (v1 quadrant)
+    blank_after: bool = True         # empty working slide after every question
     lang: str = "en"                 # en | hi | both  (for papers that print each question twice)
     render: str = "auto"             # auto | snapshot | rebuild
     theme: str = "light"             # light (v1); dark is a v2 switch, see deck.py
@@ -45,7 +48,12 @@ class Settings:
 
     def job_options(self):
         return {k: v for k, v in asdict(self).items()
-                if k in ("watermark", "axes", "lang", "render", "theme", "solutions_in_notes")}
+                if k in ("watermark", "layout", "blank_after", "lang", "render", "theme", "solutions_in_notes")}
+
+    @property
+    def key_list(self):
+        from .keypool import split_keys
+        return split_keys(self.gemini_api_keys + "\n" + self.gemini_api_key)
 
     @property
     def model_list(self):

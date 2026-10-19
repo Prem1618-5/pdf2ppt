@@ -10,6 +10,7 @@ from PIL import Image
 
 from . import imaging
 from .assemble import Fragment, assemble, reading_order
+from .refine import refine
 from .deck import Q1, DeckBuilder, rebuild_fits
 from .ingest import count_pages, dhash, iter_pages
 from .layout_classical import ClassicalLayout
@@ -116,6 +117,8 @@ def run_job(paths, out_dir, settings, options=None, progress=lambda *a: None, lo
             f["order"] = k
         raw = content + [f for f in raw if f not in content]
         boxes = [_box(f.get("box", [])) for f in raw]
+        if not str(lay.get("_model", "")).startswith("classical"):
+            boxes = refine(Image.open(p["jpeg"]), raw, boxes)
         for i, (f, box) in enumerate(zip(raw, boxes)):
             if box is None or f.get("role") not in KEEP_ROLES:
                 if box is not None and f.get("role") in ("solution", "answer_key", "clutter",
@@ -130,10 +133,13 @@ def run_job(paths, out_dir, settings, options=None, progress=lambda *a: None, lo
                     (box[2] - pb[0]) / pw * img.width, (box[3] - pb[1]) / ph * img.height)
             img = imaging.tighten(imaging.snap(img, core))
             dark = bool(lay.get("dark_background")) or imaging.is_dark(img)
-            img = imaging.to_light(img, watermark=opts["watermark"], photo=page.kind != "pdf-digital")
+            img = imaging.to_light(img, watermark=opts["watermark"], photo=page.kind != "pdf-digital",
+                                   screenshot=page.kind == "image")
             cp = os.path.join(work, f"frag_{seq:04d}_{i:03d}.png")
             img.save(cp)
             fr = _frag(p, f, box, cp, i, lay)
+            if "lite" in str(lay.get("_model", "")):
+                fr.confidence = min(fr.confidence, 0.5)   # lite models give rough boxes: review
             fr.dark = dark
             fr.watermark = bool(lay.get("watermark_present"))
             frags.append(fr)
@@ -163,11 +169,11 @@ def run_job(paths, out_dir, settings, options=None, progress=lambda *a: None, lo
         img = imaging.stack(imgs)
         if not (q.has("has_figure") or q.has("has_table") or q.passage):
             img = imaging.compress_gaps(img, target_ppi)
-        if opts["theme"] == "dark":
-            from PIL import ImageOps
-            img = ImageOps.invert(img.convert("RGB"))
         scale = min(Q1[2] / (img.width / target_ppi), Q1[3] / (img.height / target_ppi))
         glyph = imaging.text_height_pt(img, target_ppi)
+        if opts["theme"] == "dark":
+            from PIL import ImageOps
+            img = ImageOps.colorize(ImageOps.invert(img.convert("L")), black="#121418", white="#f2f2f2")
         disp_pt = round(glyph / 0.52 * scale, 1) if glyph else None
         if q.has("has_figure"):
             q.flags.append("figure")
@@ -267,8 +273,33 @@ def _frag(p, f, box, path, i, lay):
                     model=lay.get("_model", ""))
 
 
+OPT = __import__("re").compile(r"^\s*[\(\[]?([a-dA-D1-4])[\)\].]\s+(.*)$")
+
+
 def _stem(q):
-    return " ".join(f.text for f in [q.root] + q.parts if f.text).strip()
+    """Question text without duplicated lines; option lines the LLM left inside the
+    stem are moved to q.options (when it returned none)."""
+    lines, seen = [], set()
+    for f in [q.root] + q.parts:
+        for ln in (f.text or "").splitlines():
+            k = " ".join(ln.split()).lower()
+            if k and k not in seen:
+                seen.add(k)
+                lines.append(ln.strip())
+    if not q.options:
+        stem, opts = [], []
+        for ln in lines:
+            m = OPT.match(ln)
+            if m and len(opts) < 4:
+                opts.append(m.group(2))
+            elif opts:
+                opts[-1] += " " + ln
+            else:
+                stem.append(ln)
+        if len(opts) >= 2:
+            q.root.options = opts
+            return " ".join(stem)
+    return " ".join(lines)
 
 
 def _notes(q, disp_pt):

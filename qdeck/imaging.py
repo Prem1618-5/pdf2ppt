@@ -41,7 +41,7 @@ def snap(img, core):
     """`core` = pixel rect (x0,y0,x1,y1) of the LLM box inside the padded crop. Keep the
     core, extend into the padding only through rows/columns that touch the core with ink
     (completes clipped glyphs), stop at the first blank line, then trim blank margins."""
-    m = ink_mask(img)
+    m = content_mask(img)
     H, W = m.shape
     cx0, cy0, cx1, cy1 = [int(v) for v in core]
     rows = m[:, max(0, cx0):max(cx0 + 1, cx1)].sum(axis=1) > 1
@@ -75,7 +75,7 @@ def is_dark(img):
     return float(np.median(g)) < 110
 
 
-def to_light(img, watermark="keep", photo=True):
+def to_light(img, watermark="keep", photo=True, screenshot=False):
     """Return a light-theme version: dark frames are inverted, tinted paper becomes
     white. Watermarks are kept at their original faint tone unless watermark=remove."""
     a = np.asarray(img.convert("RGB")).astype(np.float32)
@@ -84,7 +84,15 @@ def to_light(img, watermark="keep", photo=True):
         gray = a.mean(axis=2, keepdims=True)
         a = np.repeat(gray, 3, axis=2)              # inverted colours look odd; use grey
         photo = True
-    if photo:
+    if screenshot and watermark == "keep" and float(np.percentile(a.mean(axis=2), 60)) > 200:
+        # already-light page (screenshot / clean scan): one global white point, so a
+        # large pale watermark is not mistaken for paper and flattened away
+        white = np.percentile(a.mean(axis=2), 90)
+        a = np.clip(a * (255.0 / max(white, 1)), 0, 255)
+        gray = a.min(axis=2) * 0.6 + a.mean(axis=2) * 0.4
+        a = np.repeat(gray[..., None], 3, axis=2)
+        photo = False
+    elif photo:
         # background (paper) estimate = large max filter on a downscaled copy
         h, w = a.shape[:2]
         f = max(1, int(max(h, w) / 300))
@@ -95,11 +103,17 @@ def to_light(img, watermark="keep", photo=True):
         a = np.clip(a / np.maximum(bg, 1) * 255.0, 0, 255)
         # levels: paper -> pure white, ink slightly darker
         a = np.clip((a - 25) * 255.0 / (238 - 25), 0, 255)
+        # photos/scans: grey ink, not the camera's blue/yellow cast
+        gray = a.min(axis=2) * 0.6 + a.mean(axis=2) * 0.4
+        a = np.repeat(gray[..., None], 3, axis=2)
     if watermark == "remove":
         lum = a.mean(axis=2)
         sat = a.max(axis=2) - a.min(axis=2)
-        # pale or tinted-but-light pixels are watermark/background, real ink is dark
-        wm = (lum > 165) | ((sat > 40) & (lum > 120))
+        # pale or tinted-but-light pixels are watermark/background, real ink is dark.
+        # Digital pages have pure black text, so a lower cut also removes grey
+        # watermark lettering and its anti-aliased edges.
+        cut = 165 if photo else 128
+        wm = (lum > cut) | ((sat > 40) & (lum > 120))
         a[wm] = 255
     return Image.fromarray(a.astype(np.uint8))
 

@@ -143,8 +143,19 @@ class GeminiLayout:
             if pg is None:
                 continue  # model skipped a page; caller falls back for it
             pg["_model"] = out["_model"]
-            with open(self._cache_path(jpegs[i]), "w", encoding="utf-8") as f:
-                json.dump(pg, f, ensure_ascii=False)
+            n_q = sum(1 for fr in pg.get("fragments", []) if fr.get("role") == "question")
+            if pg.get("page_kind") in ("questions", "mixed") and n_q <= 1 and len(todo) > 1:
+                # suspiciously empty page inside a batch: retry it alone, don't cache this
+                self.log(f"page result looks incomplete ({n_q} question); retrying it alone")
+                try:
+                    pg = self.analyse_batch([jpegs[i]])[0] or pg
+                except QuotaExhausted:
+                    pass
+                results[i] = pg
+                continue
+            if "lite" not in out["_model"]:   # lite boxes are rough: let a better model redo it later
+                with open(self._cache_path(jpegs[i]), "w", encoding="utf-8") as f:
+                    json.dump(pg, f, ensure_ascii=False)
             results[i] = pg
         return results
 

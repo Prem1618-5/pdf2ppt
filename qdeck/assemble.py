@@ -110,7 +110,8 @@ def assemble(frags: List[Fragment], lang_pref="en", log=print):
             pending_passage = f
             passage_group_open = True
             continue
-        is_cont = f.role == "continuation" or (f.role == "question" and f.number is None and f.continues_previous)
+        # an unnumbered "question" right after a question is its option block / table tail
+        is_cont = f.role == "continuation" or (f.role == "question" and f.number is None and bool(questions))
         if is_cont:
             target = None
             # prefer an open question of the same language (bilingual spreads interleave)
@@ -193,7 +194,7 @@ def assemble(frags: List[Fragment], lang_pref="en", log=print):
     section, prev = 0, None
     for q in questions:
         n = q.number
-        if n is not None and prev is not None and n < prev - 2:
+        if n is not None and prev is not None and n < prev and (n <= 2 or prev - n > 20):
             section += 1
         q.section = section
         if n is not None:
@@ -254,26 +255,32 @@ def reading_order(items, key=lambda it: it["box"]):
     if len(items) <= 1:
         return list(items)
 
-    def gutter(group):
+    def gutters(group):
         spans = sorted((key(it)[0], key(it)[2]) for it in group)
-        reach = spans[0][1]
+        out, reach = [], spans[0][1]
         for a, b in spans[1:]:
-            if a > reach + 0.002:
-                return (reach + a) / 2
+            if a > reach - 0.012:          # tolerate columns whose boxes touch/overlap a hair
+                out.append((reach + a) / 2)
             reach = max(reach, b)
+        return out
+
+    def split(group):
+        for g in gutters(group):
+            left = [it for it in group if (key(it)[0] + key(it)[2]) / 2 < g]
+            right = [it for it in group if (key(it)[0] + key(it)[2]) / 2 >= g]
+            if left and right:
+                return left, right
         return None
 
-    g = gutter(items)
-    if g is not None:
-        left = [it for it in items if key(it)[0] < g]
-        right = [it for it in items if key(it)[0] >= g]
-        return reading_order(left, key) + reading_order(right, key)
+    sp = split(items)
+    if sp:
+        return reading_order(sp[0], key) + reading_order(sp[1], key)
 
     gx0 = min(key(it)[0] for it in items)
     gx1 = max(key(it)[2] for it in items)
     wide = [it for it in items if key(it)[2] - key(it)[0] > 0.5 * (gx1 - gx0)]
     narrow = [it for it in items if it not in wide]
-    if wide and narrow and gutter(narrow) is not None:
+    if wide and narrow and split(narrow):
         out, rest = [], sorted(narrow, key=lambda it: key(it)[1])
         for w in sorted(wide, key=lambda it: key(it)[1]):
             above = [it for it in rest if (key(it)[1] + key(it)[3]) / 2 < (key(w)[1] + key(w)[3]) / 2]

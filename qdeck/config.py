@@ -22,7 +22,7 @@ class Settings:
     gemini_api_key: str = field(default_factory=lambda: _env("GEMINI_API_KEY", ""))
     # First model that answers wins; later ones are used on 404 / quota exhaustion.
     gemini_models: str = field(default_factory=lambda: _env(
-        "GEMINI_MODELS", "gemini-3.8-flash,gemini-3.7-flash,gemini-3-flash-preview,gemini-3.6-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite"))
+        "GEMINI_MODELS", "gemini-3.8-flash,gemini-3-flash-preview,gemini-3.7-flash,gemini-3.6-flash,gemini-3.5-flash-lite,gemini-3.1-flash-lite"))
     gemini_rpm: int = field(default_factory=lambda: _env("GEMINI_RPM", 8))
     gemini_workers: int = field(default_factory=lambda: _env("GEMINI_WORKERS", 2))
     # Pages per request. Free tier is counted in requests/day (20 per Flash model at the

@@ -166,9 +166,18 @@ class ClassicalLayout:
         self.had_question = self.had_question or any(f["role"] == "question" for f in frags)
         if frags and frags[-1]["role"] == "question":
             frags[-1]["continues_on_next"] = True  # unknown: the next page decides
+        for l in lines:
+            if l not in content:   # bands, headers, footers: boundaries for crop padding
+                frags.append({"role": "clutter", "label": None, "number": None, "continues_previous": False,
+                              "continues_on_next": False,
+                              "box": [int(l[1] * 1000), int(l[0] * 1000), int(np.ceil(l[3] * 1000)), int(np.ceil(l[2] * 1000))],
+                              "lang": "en", "has_figure": False, "has_math": False, "has_table": False,
+                              "stem": "", "options": [], "confidence": 1.0})
         for i, f in enumerate(frags):
             f["order"] = i
         return {"page_kind": "questions" if frags else "blank_or_ad", "dark_background": False,
+                "watermark_present": bool(getattr(self, "repeated_figs", None)) or any(
+                    "watermark" in t or "sample" in t for t in self.repeated),
                 "fragments": frags, "_model": "classical-text"}
 
     @staticmethod

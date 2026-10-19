@@ -111,7 +111,8 @@ def assemble(frags: List[Fragment], lang_pref="en", log=print):
             passage_group_open = True
             continue
         # an unnumbered "question" right after a question is its option block / table tail
-        is_cont = f.role == "continuation" or (f.role == "question" and f.number is None and bool(questions))
+        is_cont = f.role == "continuation" or (f.role == "question" and f.number is None and bool(questions)
+                                                and not f.model.startswith("classical"))
         if is_cont:
             target = None
             # prefer an open question of the same language (bilingual spreads interleave)

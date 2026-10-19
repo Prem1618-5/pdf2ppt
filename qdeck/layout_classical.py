@@ -108,7 +108,7 @@ class ClassicalLayout:
         m = ANCHOR.match(t)
         if m and self.expected_next is not None and 0 <= int(m.group(1)) - self.expected_next <= 6 and x0 < 0.5:
             return False   # the next question number, not a page number
-        if (y0 < 0.05 or y1 > 0.95) and (CLUTTER.search(t) or PAGE_NO.match(t) or len(t) < 40):
+        if (y0 < 0.05 or y1 > 0.95) and (CLUTTER.search(t) or PAGE_NO.match(t)):
             return True
         if MARKS.match(t) and x0 > 0.6:
             return True    # marks / negative-marks cells
@@ -190,6 +190,11 @@ class ClassicalLayout:
 
     def _frag(self, role, label, x0, y0, x1, y1, lines, figs, number=None, cont=False):
         text = " ".join(l[4] for l in lines)
+        # horizontal extent from the real content (marks cells are clutter, not content)
+        ext = [l for l in lines] + [f for f in figs if y0 - 0.002 <= f[1] <= y1]
+        if ext:
+            x0 = max(x0, min(e[0] for e in ext) - 0.006)
+            x1 = min(x1, max(e[2] for e in ext) + 0.008)
         hi = bool(re.search(r"[ऀ-ॿ]", text))
         en = bool(re.search(r"[A-Za-z]{3}", text))
         return {"role": role, "label": label, "number": number, "continues_previous": cont,

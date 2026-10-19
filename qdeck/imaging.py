@@ -46,12 +46,27 @@ def snap(img, core):
     cx0, cy0, cx1, cy1 = [int(v) for v in core]
     rows = m[:, max(0, cx0):max(cx0 + 1, cx1)].sum(axis=1) > 1
     cols = m[max(0, cy0):max(cy0 + 1, cy1), :].sum(axis=0) > 1
+    cy0, cy1 = max(0, min(H - 1, cy0)), max(1, min(H, cy1))
+    # a text line cut by the box edge: complete it if most of it is inside the box,
+    # otherwise it belongs to the neighbour -> trim back to the blank row
     top = cy0
-    while top > 0 and rows[top - 1]:
-        top -= 1
+    if rows[cy0]:
+        a = cy0
+        while a > 0 and rows[a - 1]:
+            a -= 1
+        b = cy0
+        while b < H and rows[b]:
+            b += 1
+        top = a if (b - cy0) >= (cy0 - a) else min(b, cy1 - 1)
     bot = cy1
-    while bot < H and rows[bot]:
-        bot += 1
+    if rows[cy1 - 1]:
+        a = cy1 - 1
+        while a > 0 and rows[a - 1]:
+            a -= 1
+        b = cy1
+        while b < H and rows[b]:
+            b += 1
+        bot = b if (cy1 - a) >= (b - cy1) else max(a, top + 1)
     left = cx0
     while left > 0 and cols[left - 1]:
         left -= 1
@@ -66,8 +81,8 @@ def snap(img, core):
         b = min(H, top + ys.max() + 1 + margin)
         l = max(0, left + xs.min() - margin)
         r = min(W, left + xs.max() + 1 + margin)
-        return img.crop((l, t, r, b))
-    return img.crop((left, top, right, bot))
+        return img.crop((l, t, r, b)), l
+    return img.crop((left, top, right, bot)), left
 
 
 def is_dark(img):
@@ -128,13 +143,18 @@ def text_height_pt(img, px_per_in):
     return float(np.median(hs)) / px_per_in * 72.0
 
 
-def stack(images, gap=14):
-    W = max(i.width for i in images)
+def stack(images, gap=14, offsets=None):
+    """Stack fragments vertically. `offsets` (px) keep parts of a page-split question
+    aligned as they were on the page; column-split parts are left-aligned."""
+    offs = list(offsets or [0] * len(images))
+    base = min(offs)
+    offs = [o - base for o in offs]
+    W = max(i.width + o for i, o in zip(images, offs))
     H = sum(i.height for i in images) + gap * (len(images) - 1)
     out = Image.new("RGB", (W, H), "white")
     y = 0
-    for im in images:
-        out.paste(im.convert("RGB"), (0, y))
+    for im, o in zip(images, offs):
+        out.paste(im.convert("RGB"), (o, y))
         y += im.height + gap
     return out
 
@@ -164,10 +184,10 @@ def tighten(img):
     The left edge is never cut, so the printed question number stays visible."""
     H, W = img.height, img.width
     if H < 20 or W < 20:
-        return img
+        return img, 0
     c = content_mask(img)
     if c.sum() < 50:
-        return img
+        return img, 0
     cols = c.sum(axis=0) > 0
     xs = np.where(cols)[0]
     right = xs.max() + 1
@@ -186,10 +206,10 @@ def tighten(img):
     xs = np.where(c[:, :right].sum(axis=0) > 0)[0]
     ys = np.where(c[:, :right].sum(axis=1) > 0)[0]
     if not len(xs) or not len(ys):
-        return img
+        return img, 0
     mg = 8
-    return img.crop((max(0, xs.min() - mg), max(0, ys.min() - mg),
-                     min(W, xs.max() + 1 + mg), min(H, ys.max() + 1 + mg)))
+    l = max(0, xs.min() - mg)
+    return img.crop((l, max(0, ys.min() - mg), min(W, xs.max() + 1 + mg), min(H, ys.max() + 1 + mg))), l
 
 
 def content_mask(img):

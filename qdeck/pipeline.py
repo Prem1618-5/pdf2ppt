@@ -131,7 +131,9 @@ def run_job(paths, out_dir, settings, options=None, progress=lambda *a: None, lo
             pw, ph = pb[2] - pb[0], pb[3] - pb[1]
             core = ((box[0] - pb[0]) / pw * img.width, (box[1] - pb[1]) / ph * img.height,
                     (box[2] - pb[0]) / pw * img.width, (box[3] - pb[1]) / ph * img.height)
-            img = imaging.tighten(imaging.snap(img, core))
+            img, l1 = imaging.snap(img, core)
+            img, l2 = imaging.tighten(img)
+            left_in = pb[0] * page.width_in + (l1 + l2) / max(1e-6, _ppi(page, pb, settings.crop_dpi))
             dark = bool(lay.get("dark_background")) or imaging.is_dark(img)
             img = imaging.to_light(img, watermark=opts["watermark"], photo=page.kind != "pdf-digital",
                                    screenshot=page.kind == "image")
@@ -144,6 +146,7 @@ def run_job(paths, out_dir, settings, options=None, progress=lambda *a: None, lo
             fr.watermark = bool(lay.get("watermark_present"))
             frags.append(fr)
             fr._ppi = _ppi(page, pb, settings.crop_dpi)
+            fr._left_in = left_in
         progress("cropped", seq + 1, n_pages)
 
     # ---- assemble ---------------------------------------------------------------------
@@ -166,7 +169,9 @@ def run_job(paths, out_dir, settings, options=None, progress=lambda *a: None, lo
                 s = target_ppi / ppi
                 im = im.resize((max(1, int(im.width * s)), max(1, int(im.height * s))), Image.LANCZOS)
             imgs.append(im)
-        img = imaging.stack(imgs)
+        lefts = [getattr(f, "_left_in", 0.0) for f in parts]
+        aligned = max(lefts) - min(lefts) < 1.0   # same column position -> keep alignment
+        img = imaging.stack(imgs, offsets=[int((l - min(lefts)) * target_ppi) for l in lefts] if aligned else None)
         if not (q.has("has_figure") or q.has("has_table") or q.passage):
             img = imaging.compress_gaps(img, target_ppi)
         scale = min(Q1[2] / (img.width / target_ppi), Q1[3] / (img.height / target_ppi))
@@ -261,8 +266,20 @@ def _ppi(page, pb, crop_dpi):
     return crop_dpi
 
 
+def _script_lang(text, fallback):
+    """Language from the transcribed script, not the model's label (lite models call a
+    Hindi block 'bilingual' when it contains a few Latin symbols)."""
+    dev = sum(1 for c in text if "\u0900" <= c <= "\u097f")
+    lat = sum(1 for c in text if c.isascii() and c.isalpha())
+    if dev + lat < 12:
+        return fallback
+    r = dev / (dev + lat)
+    return "hi" if r > 0.6 else ("en" if r < 0.1 else "bilingual")
+
+
 def _frag(p, f, box, path, i, lay):
     text = (f.get("stem") or f.get("text") or "").strip()
+    f["lang"] = _script_lang(text + " " + " ".join(f.get("options") or []), f.get("lang", "en"))
     return Fragment(page_seq=p["seq"], page_ref=p["ref"], order=f.get("order", i), role=f.get("role", "question"),
                     label=f.get("label"), number=f.get("number"), lang=f.get("lang", "en"), box=box,
                     crop_path=path, text=text, options=[o for o in (f.get("options") or []) if o],

@@ -90,6 +90,7 @@ class GeminiLayout:
         self.lock = threading.Lock()
         self.last_calls = []
         self.calls = 0
+        self.only_lite = False
         self.cache_hits = 0
         os.makedirs(os.path.join(settings.cache_dir, "layout"), exist_ok=True)
 
@@ -116,25 +117,43 @@ class GeminiLayout:
         """One request for several pages; per-page results are cached individually so
         a rerun (or a different batch size) costs nothing."""
         results = [None] * len(jpegs)
+        soft = {}      # lite-model results: used only if no better model answers
         todo = []
         for i, j in enumerate(jpegs):
             cp = self._cache_path(j)
             if os.path.exists(cp):
-                self.cache_hits += 1
                 with open(cp, encoding="utf-8") as f:
-                    results[i] = json.load(f)
+                    cached = json.load(f)
+                if "lite" in cached.get("_model", "") and not self.only_lite:
+                    soft[i] = cached
+                    todo.append(i)
+                else:
+                    self.cache_hits += 1
+                    results[i] = cached
             else:
                 todo.append(i)
         if not todo:
             return results
         if not self.s.gemini_api_key:
             raise QuotaExhausted("no GEMINI_API_KEY configured")
+        if soft and len(soft) == len(todo):
+            try:
+                return self._fresh(jpegs, todo, results, better_only=True)
+            except QuotaExhausted:
+                self.only_lite = True
+                for i, pg in soft.items():
+                    self.cache_hits += 1
+                    results[i] = pg
+                return results
+        return self._fresh(jpegs, todo, results)
+
+    def _fresh(self, jpegs, todo, results, better_only=False):
         parts = []
         for k, i in enumerate(todo, 1):
             parts.append({"text": f"PAGE {k}"})
             parts.append({"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(jpegs[i]).decode()}})
         parts.append({"text": PROMPT.replace("{n}", str(len(todo)))})
-        out = self._call(parts)
+        out = self._call(parts, better_only=better_only)
         by_page = {}
         for pg in out.get("pages", []):
             by_page.setdefault(pg.get("page"), pg)
@@ -153,19 +172,19 @@ class GeminiLayout:
                     pass
                 results[i] = pg
                 continue
-            if "lite" not in out["_model"]:   # lite boxes are rough: let a better model redo it later
-                with open(self._cache_path(jpegs[i]), "w", encoding="utf-8") as f:
-                    json.dump(pg, f, ensure_ascii=False)
+            # lite results are cached too, but as "soft" entries a better model may replace
+            with open(self._cache_path(jpegs[i]), "w", encoding="utf-8") as f:
+                json.dump(pg, f, ensure_ascii=False)
             results[i] = pg
         return results
 
-    def _call(self, parts):
+    def _call(self, parts, better_only=False):
         gen = {"responseMimeType": "application/json", "responseSchema": SCHEMA,
                "temperature": 0, "maxOutputTokens": 60000, "thinkingConfig": {"thinkingLevel": "low"}}
         body = {"contents": [{"parts": parts}], "generationConfig": gen}
         last_err = None
-        for rnd in range(4):          # 503 storms are transient: go round the models again
-            out = self._call_round(body, gen)
+        for rnd in range(1 if better_only else 4):   # 503 storms are transient: go round again
+            out = self._call_round(body, gen, better_only)
             if isinstance(out, dict):
                 return out
             last_err = out[1]
@@ -175,10 +194,10 @@ class GeminiLayout:
             time.sleep(30 * (rnd + 1))
         raise QuotaExhausted(last_err or "all models exhausted")
 
-    def _call_round(self, body, gen):
+    def _call_round(self, body, gen, better_only=False):
         last_err, busy = None, False
         for model in self.models:
-            if model in self.dead_models:
+            if model in self.dead_models or (better_only and "lite" in model):
                 continue
             gen_m = dict(gen)
             for attempt in range(5):

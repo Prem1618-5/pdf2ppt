@@ -101,6 +101,31 @@ class ClassicalLayout:
             del merged[b]
         return [(max(0, a - 0.01), min(1, b + 0.01)) for a, b in merged]
 
+    @staticmethod
+    def _merge_numberless(cols, content):
+        """A 'column' with no question-number lines at all, on a page where another
+        column has them, is a figure / option block beside the text (table layouts),
+        not a real column: merge it into its left neighbour."""
+        if len(cols) < 2:
+            return cols
+
+        def has_numbers(c):
+            ls = [l for l in content if c[0] <= (l[0] + l[2]) / 2 <= c[1]]
+            if not ls:
+                return False
+            left = min(l[0] for l in ls)
+            return any(ANCHOR.match(l[4]) and l[0] <= left + 0.05 for l in ls)
+        flags = [has_numbers(c) for c in cols]
+        if not any(flags):
+            return cols
+        out = [list(cols[0])]
+        for c, f in zip(cols[1:], flags[1:]):
+            if f:
+                out.append(list(c))
+            else:
+                out[-1][1] = max(out[-1][1], c[1])
+        return [tuple(c) for c in out]
+
     def _is_clutter(self, l):
         x0, y0, x1, y1, t, s = l
         if _norm(t) in self.repeated:
@@ -122,6 +147,7 @@ class ClassicalLayout:
                 if tuple(round(v, 2) for v in f) not in getattr(self, "repeated_figs", set())]
         content = [l for l in lines if not self._is_clutter(l)]
         cols = self._columns(content)
+        cols = self._merge_numberless(cols, content)
         frags = []
         for ci, (cx0, cx1) in enumerate(cols):
             col_lines = sorted([l for l in content if cx0 <= (l[0] + l[2]) / 2 <= cx1], key=lambda l: l[1])
@@ -150,7 +176,9 @@ class ClassicalLayout:
             if top_lines and (frags or self.had_question):
                 y0 = min(l[1] for l in top_lines)
                 y1 = max(l[3] for l in top_lines)
-                if not any(SOLUTION.match(l[4]) for l in top_lines[:1]):
+                lone_band = (len(top_lines) == 1 and abs((top_lines[0][0] + top_lines[0][2]) / 2 - 0.5) < 0.1
+                             and top_lines[0][2] - top_lines[0][0] < 0.35)   # centred section band
+                if not lone_band and not any(SOLUTION.match(l[4]) for l in top_lines[:1]):
                     frags.append(self._frag("continuation", None, cx0, y0, cx1, y1, top_lines, col_figs, cont=True))
             for i, (l, n) in enumerate(anchors):
                 ys, ye = bounds[i], bounds[i + 1]

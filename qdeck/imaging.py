@@ -318,10 +318,17 @@ def strip_rules(img):
     H, W = g.shape
     if H < 30 or W < 30:
         return full
-    m = (cv2.adaptiveThreshold(g, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 35, 18) > 0).astype(np.uint8)
+    # plain darkness test: faint 1-px grey table rules are missed by adaptive thresholds
+    m = (g < 225).astype(np.uint8)
     vert = cv2.morphologyEx(m, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, int(H * 0.55))))
     horiz = cv2.morphologyEx(m, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (int(W * 0.75), 1)))
-    rules = cv2.dilate(vert | horiz, np.ones((3, 3), np.uint8))
+    # short border stubs left at the very top/bottom edge of the crop (cut cell borders)
+    edge = np.zeros_like(m)
+    band = max(2, int(H * 0.03))
+    stub = cv2.getStructuringElement(cv2.MORPH_RECT, (max(8, int(W * 0.03)), 1))
+    edge[:band] = cv2.morphologyEx(m[:band], cv2.MORPH_OPEN, stub)
+    edge[-band:] = cv2.morphologyEx(m[-band:], cv2.MORPH_OPEN, stub)
+    rules = cv2.dilate(vert | horiz | edge, np.ones((3, 3), np.uint8))
     if not rules.any():
         return full
     if f != 1.0:

@@ -51,7 +51,9 @@ def test_full_edit_flow(client):
     assert r.status_code == 200 and r.json()["item"]["rev"] == first["rev"] + 1
     # delete, duplicate, merge, reorder, settings, undo
     ids = [x["id"] for x in p["items"]]
-    assert len(c.delete(f"/api/jobs/{jid}/items/{ids[5]}").json()["project"]["items"]) == 74
+    after_delete = c.delete(f"/api/jobs/{jid}/items/{ids[5]}").json()["project"]
+    assert len(after_delete["items"]) == 74
+    assert after_delete["integrity"]["ok"] is False and after_delete["integrity"]["gaps"]   # live numbering check
     assert len(c.post(f"/api/jobs/{jid}/items/{ids[6]}/duplicate").json()["project"]["items"]) == 75
     proj = c.post(f"/api/jobs/{jid}/items/{ids[1]}/merge", json={"with": ids[2]}).json()["project"]
     assert len(proj["items"]) == 74
@@ -74,3 +76,23 @@ def test_full_edit_flow(client):
         assert (len(slide.shapes) == 0) == (i % 2 == 1)
     assert c.post("/api/keys/check", json={"keys": []}).json() == []
     assert c.delete(f"/api/jobs/{jid}").json()["deleted"]
+
+
+def test_image_request_does_not_undo_concurrent_edit(client):
+    """Regression: GET item png used to save a stale project copy over a fresh edit."""
+    import threading
+    c = client
+    with open(PDF, "rb") as f:
+        jid = c.post("/api/jobs", files=[("files", ("electrician.pdf", f, "application/pdf"))]).json()["id"]
+    assert _wait(c, jid)["state"] == "done"
+    items = c.get(f"/api/jobs/{jid}/project").json()["items"]
+    a, b = items[10], items[20]
+    box = a["parts"][0]["box"]
+    t = threading.Thread(target=lambda: c.patch(f"/api/jobs/{jid}/items/{a['id']}", json={
+        "label": "RACE", "parts": [{"page": a["parts"][0]["page"], "box": [box[0], box[1], box[2], box[1] + 0.05]}]}))
+    t.start()
+    for _ in range(5):
+        c.get(f"/api/jobs/{jid}/items/{b['id']}.png")
+    t.join()
+    after = {x["id"]: x for x in c.get(f"/api/jobs/{jid}/project").json()["items"]}
+    assert after[a["id"]]["label"] == "RACE" and after[a["id"]]["rev"] == a["rev"] + 1

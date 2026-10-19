@@ -51,8 +51,9 @@ def test_import_pptx(tmp_path):
     assert [it["label"] for it in items] == ["7.", "2", "Q.43", "4"]
     assert [it["number"] for it in items] == [7, 2, 43, 4]
     assert len({it["id"] for it in items}) == 4 and items[0]["id"] == "q0007"
-    assert [it["blank_after"] for it in items] == [True, False, False, False]
-    assert proj["settings"] == {"layout": "fill", "blank_after": True, "watermark": "keep", "theme": "light"}
+    # 1 of 4 slides is followed by a blank: deck-wide setting off, that slide overrides it
+    assert [it["blank_after"] for it in items] == [True, None, None, None]
+    assert proj["settings"] == {"layout": "fill", "blank_after": False, "watermark": "keep", "theme": "light"}
 
     assert items[0]["render"] == "snapshot" and items[0]["parts"] == [{"page": 0, "box": [0.0, 0.0, 1.0, 1.0]}]
     x0, y0, x1, y1 = items[1]["parts"][0]["box"]

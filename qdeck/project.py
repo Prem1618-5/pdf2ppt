@@ -97,9 +97,21 @@ class Project:
             items.append({k: it.get(k) for k in ("id", "label", "number", "lang", "render", "stem", "options",
                                                  "parts", "flags", "confidence", "blank_after", "custom_image",
                                                  "rev", "img_w", "img_h", "display_font_pt")})
-        return {"settings": self.settings, "integrity": self.data.get("integrity", {}),
+        return {"settings": self.settings, "integrity": self.integrity(),
                 "summary": self.data.get("summary", ""), "pages": pages, "items": items,
                 "can_undo": bool(self.data.get("undo"))}
+
+    def integrity(self):
+        """Numbering check recomputed from the current slides (edits change it)."""
+        from .assemble import integrity_check
+
+        class _Q:
+            def __init__(self, it):
+                self.number = it.get("number")
+                self.section = int(it.get("section") or 1) - 1
+        out = integrity_check([_Q(it) for it in self.data["items"]])
+        out.pop("sections", None)
+        return out
 
     # ------------------------------------------------------------------ pages
     def open_page(self, seq):
@@ -260,9 +272,7 @@ class Project:
         os.makedirs(out_dir, exist_ok=True)
         base = os.path.join(out_dir, title)
         deck.save(base + ".pptx")
-        integ = self.data.get("integrity") or {"detected": len(rows), "expected": len(rows), "gaps": [],
-                                                "duplicates": [], "out_of_order": [], "sections": [], "ok": True}
-        integ = dict(integ, detected=len(rows))
+        integ = dict(self.integrity(), sections=[])
         write_csv(base + "_qa.csv", rows)
         write_html(base + "_qa.html", title, self.data.get("summary", ""), integ, rows, thumbs)
         self.save()

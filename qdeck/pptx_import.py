@@ -13,7 +13,7 @@ from pptx import Presentation
 from pptx.enum.shapes import MSO_SHAPE_TYPE
 
 _RASTER_KEEP = {"png": "png", "jpg": "jpg", "jpeg": "jpg"}
-_NOTES_LABEL = re.compile(r"^Q\s*([^|\s]+)")
+_NOTES_LABEL = re.compile(r"^Q\s+([^|]+?)\s*(?:\||$)")
 # '7.' / '7)' / 'Q.43' / 'Q 43.' / 'Q43' / '(12)'
 _TEXT_LABEL = re.compile(r"^\s*(Q\s*\.?\s*\d+[.)]?|\(\d+\)|\d+[.)])(?=\s|$)", re.I)
 _OPTION = re.compile(r"^\s*(?:\(([a-dA-D1-4])\)|([a-dA-D])\))\s*(.*)$", re.S)
@@ -198,5 +198,11 @@ def import_pptx(pptx_path: str, out_dir: str) -> dict:
             item.update(render="text", stem=stem, options=options)
         items.append(item)
 
+    # deck-wide setting = what most slides do; only exceptions keep a per-slide override,
+    # so the editor's global "blank slide after each question" switch works on imports
+    with_blank = sum(1 for it in items if it["blank_after"])
+    deck_blank = bool(items) and with_blank * 2 >= len(items)
+    for it in items:
+        it["blank_after"] = None if it["blank_after"] == deck_blank else it["blank_after"]
     return {"pages": pages, "items": items,
-            "settings": {"layout": "fill", "blank_after": found_blank, "watermark": "keep", "theme": "light"}}
+            "settings": {"layout": "fill", "blank_after": deck_blank, "watermark": "keep", "theme": "light"}}

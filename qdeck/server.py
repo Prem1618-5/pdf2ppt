@@ -269,6 +269,7 @@ def page_image(jid: str, seq: int):
 def item_image(jid: str, iid: str):
     p = _project(jid)
     with p.lock:
+        p = Project(p.root)            # re-read inside the lock: never save a stale copy
         try:
             path = p.item_png(iid)
         except KeyError:

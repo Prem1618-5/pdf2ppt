@@ -161,12 +161,15 @@
   };
   $('keysRemember').onchange = rememberKeys;
   $('keysText').onchange = rememberKeys;
+  $('keysText').oninput = rememberKeys;      // also keep typing that never left the box (tab closed)
   $('keysCheck').onclick = function () {
-    var keys = keyLines(), out = $('keysResult');
+    var keys = keyLines(), out = $('keysResult'), btn = this;
     if (!keys.length) { out.innerHTML = '<li class="muted">Type or paste at least one key first.</li>'; return; }
     out.innerHTML = '<li class="muted">Checking&hellip;</li>';
     rememberKeys();
+    btn.disabled = true;
     api('POST', '/api/keys/check', { keys: keys }, function (err, res) {
+      btn.disabled = false;
       if (err) { out.innerHTML = '<li class="bad">' + esc(err) + '</li>'; return; }
       var html = '';
       for (var i = 0; i < (res || []).length; i++) {
@@ -301,6 +304,8 @@
   function startOver() {
     clearTimeout(pollTimer);
     closeCrop();
+    while (editQueue.length) { editQueue.shift(); busy(false); }   // edits not sent yet belong to the old job
+    editing = false;
     jobId = null; project = null; selId = null;
     setHashJob(null);
     chosenFiles = [];
@@ -390,19 +395,35 @@
    * Run an edit. kind: 'item' | 'project' (what the server sends back).
    * opts.after(data) runs after the screen is updated.
    */
-  var editing = false;
+  /*
+   * Edits go to the server one at a time, in the order they were made, so a quick
+   * "change label, then undo" can never arrive the other way round.
+   */
+  var editing = false, editQueue = [], editRunning = false;
   function edit(method, path, body, opts) {
     opts = opts || {};
     if (opts.exclusive) { if (editing) return; editing = true; }
     busy(true);
-    api(method, jobPath(path), body, function (err, res) {
+    editQueue.push({ method: method, path: path, body: body, opts: opts });
+    if (!editRunning) nextEdit();
+  }
+  function nextEdit() {
+    var e = editQueue.shift();
+    editRunning = !!e;
+    if (!e) return;
+    var opts = e.opts, jid = jobId;
+    api(e.method, jobPath(e.path), e.body, function (err, res) {
       busy(false);
       if (opts.exclusive) editing = false;
-      if (err) { toast(err, true); if (opts.fail) opts.fail(err); return; }
-      if (res && res.project) applyProject(res.project);
-      else if (res && res.item) applyItem(res.item);
-      if (opts.after) opts.after(res);
-      toast(opts.message || 'Saved');
+      if (jid !== jobId) { nextEdit(); return; }        // the teacher started over meanwhile
+      if (err) { toast(err, true); if (opts.fail) opts.fail(err); }
+      else {
+        if (res && res.project) applyProject(res.project);
+        else if (res && res.item) applyItem(res.item);
+        if (opts.after) opts.after(res);
+        toast(opts.message || 'Saved');
+      }
+      nextEdit();
     });
   }
 
@@ -435,9 +456,10 @@
   $('setLayoutTR').onchange = function () { edit('PATCH', '/settings', { layout: 'top-right' }); };
   $('setWatermark').onchange = function () { edit('PATCH', '/settings', { watermark: this.checked ? 'remove' : 'keep' }); };
 
+  /* Not exclusive: pressing Ctrl+Z three times quickly undoes three edits (they queue up). */
   function undo() {
     if (!project || !project.can_undo) return;
-    edit('POST', '/undo', null, { exclusive: true, message: 'Undone' });
+    edit('POST', '/undo', null, { message: 'Undone' });
   }
   $('undoBtn').onclick = undo;
 
@@ -487,7 +509,9 @@
       '<span class="slide-label">' + (esc(it.label) || '<i>(no label)</i>') + '</span>' +
       '<span class="slide-move"><button type="button" data-mv="-1" title="Move up"' + (idx === 0 ? ' disabled' : '') + '>&#9650;</button>' +
       '<button type="button" data-mv="1" title="Move down"' + (last ? ' disabled' : '') + '>&#9660;</button></span></div>' +
-      '<img class="thumb" alt="" draggable="false" loading="lazy" src="' + esc(thumbUrl(it)) + '">' +
+      (it.render === 'text'
+        ? '<div class="thumb-text"><b>' + esc(it.label) + '</b> ' + esc(it.stem) + '</div>'
+        : '<img class="thumb" alt="" draggable="false" loading="lazy" src="' + esc(thumbUrl(it)) + '">') +
       '<div class="chips">' + chipsHtml(it) + '</div>';
     return row;
   }
@@ -613,13 +637,18 @@
 
   /*
    * Where the question goes on the slide, as fractions of the slide.
-   * fill: as large as possible, centred, starting near the top.
-   * top-right: inside the top-right quarter.
+   * Same boxes as the PowerPoint writer (qdeck/deck.py, 13.333 x 7.5 in slide):
+   * fill: 0.3 in margin, picture centred and top-aligned.
+   * top-right: the top-right quarter with a 0.15 in inset, picture left- and top-aligned.
    */
   function layoutArea() {
-    var m = 0.02;
-    if (project.settings.layout === 'top-right') return { x: 0.5, y: m, w: 0.5 - m, h: 0.5 - m, right: true };
-    return { x: m, y: m, w: 1 - 2 * m, h: 1 - 2 * m, right: false };
+    var SW = 13.333, SH = 7.5, m, ins;
+    if (project.settings.layout === 'top-right') {
+      ins = 0.15;
+      return { x: (SW / 2 + ins) / SW, y: ins / SH, w: (SW / 2 - 2 * ins) / SW, h: (SH / 2 - 2 * ins) / SH, right: true };
+    }
+    m = 0.3;
+    return { x: m / SW, y: m / SH, w: (SW - 2 * m) / SW, h: (SH - 2 * m) / SH, right: false };
   }
 
   function renderPreview() {
@@ -665,7 +694,7 @@
       img.style.width = w + 'px';
       img.style.height = h + 'px';
       img.style.top = ay + 'px';
-      img.style.left = (a.right ? ax + aw - w : ax + (aw - w) / 2) + 'px';
+      img.style.left = (a.right ? ax : ax + (aw - w) / 2) + 'px';
     };
     if (it.img_w && it.img_h) place(it.img_w, it.img_h);
     else { img.style.visibility = 'hidden'; img.onload = function () { place(img.naturalWidth, img.naturalHeight); img.style.visibility = 'visible'; }; }
@@ -685,17 +714,28 @@
 
   /* ---------- item panel ---------- */
 
+  var panelId = null;      // item shown in the panel
+  var textDirty = false;   // question text / options typed but not saved yet
+  function focusIn(box) {
+    var a = document.activeElement;
+    while (a) { if (a === box) return true; a = a.parentNode; }
+    return false;
+  }
   function renderPanel() {
     var it = selItem();
     show($('panelEmpty'), !it);
     show($('panelBody'), !!it);
-    if (!it) return;
-    $('pLabel').value = it.label || '';
+    if (!it) { panelId = null; return; }
+    var same = panelId === it.id;
+    if (!same) textDirty = false;
+    panelId = it.id;
+    if (!(same && document.activeElement === $('pLabel'))) $('pLabel').value = it.label || '';
     var isText = it.render === 'text';
     setClass($('pRenderPic'), 'on', !isText);
     setClass($('pRenderText'), 'on', isText);
     show($('pTextBox'), isText);
-    if (isText) {
+    /* an answer for an earlier save must not wipe what is being typed now */
+    if (isText && !(same && (textDirty || focusIn($('pTextBox'))))) {
       $('pStem').value = it.stem || '';
       renderOptionInputs(it.options || []);
     }
@@ -723,7 +763,7 @@
     var row = el('div', 'opt-row');
     row.innerHTML = '<input type="text" placeholder="Option ' + String.fromCharCode(97 + n) + '"><button type="button" title="Remove this option">&#10005;</button>';
     row.firstChild.value = val || '';
-    row.lastChild.onclick = function () { box.removeChild(row); };
+    row.lastChild.onclick = function () { box.removeChild(row); textDirty = true; saveText(); };
     box.appendChild(row);
     return row.firstChild;
   }
@@ -744,13 +784,18 @@
   $('pRenderPic').onclick = function () { setRender('snapshot'); };
   $('pRenderText').onclick = function () { setRender('text'); };
 
-  $('pSaveText').onclick = function () {
+  /* Text is saved when a field is left (so switching slides never loses typing) or with the button. */
+  function saveText() {
     var it = selItem();
-    if (!it) return;
+    if (!it || it.id !== panelId || !textDirty) return;
+    textDirty = false;
     var inputs = $('pOptions').getElementsByTagName('input'), opts = [];
     for (var i = 0; i < inputs.length; i++) { var v = trim(inputs[i].value); if (v) opts.push(v); }
     edit('PATCH', '/items/' + it.id, { stem: $('pStem').value, options: opts });
-  };
+  }
+  $('pTextBox').oninput = function () { textDirty = true; };
+  $('pTextBox').onchange = function () { saveText(); };
+  $('pSaveText').onclick = function () { if (textDirty) saveText(); else toast('Saved'); };
 
   $('pBlank').onchange = function () {
     var it = selItem();
@@ -858,7 +903,7 @@
     for (i = page.childNodes.length - 1; i >= 0; i--) if (page.childNodes[i].tagName !== 'IMG') page.removeChild(page.childNodes[i]);
     for (i = 0; i < crop.parts.length; i++) {
       if (crop.parts[i].page !== seq) continue;
-      var b = el('div', 'cbox' + (i === crop.sel ? ' sel' : ''));
+      var b = el('div', 'cbox' + (i === crop.sel ? ' sel' : '') + (crop.parts[i].box[1] < 0.03 ? ' at-top' : ''));
       b.id = 'cbox_' + i;
       b.setAttribute('data-idx', i);
       var h = '<span class="cnum">Part ' + (i + 1) + '</span>', hs = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];

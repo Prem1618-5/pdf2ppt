@@ -142,6 +142,7 @@ label.drop:hover { border-color: #2457c5; background: #f3f7fe; }
 .cbox.sel { border-color: #d9480f; background: rgba(217,72,15,.10); }
 .cbox .cnum { position: absolute; left: -2px; top: -22px; background: #2457c5; color: #fff; font-size: 13px; padding: 1px 6px; border-radius: 3px; pointer-events: none; }
 .cbox.sel .cnum { background: #d9480f; }
+.cbox.at-top .cnum { left: 2px; top: 2px; }   /* box touches the page top: keep the tag visible */
 .hdl { position: absolute; width: 14px; height: 14px; margin: -7px 0 0 -7px; background: #fff; border: 2px solid #d9480f; }
 .cbox:not(.sel) .hdl { border-color: #2457c5; }
 .hdl.nw { left: 0; top: 0; cursor: nwse-resize; }   .hdl.n { left: 50%; top: 0; cursor: ns-resize; }

@@ -1,0 +1,45 @@
+# Solution 3 ("no always-on server"): run a conversion inside GitHub Actions.
+# Trigger manually with a public/presigned URL of the paper; the deck comes back as a
+# workflow artifact (auto-expires after 1 day). GEMINI_API_KEY lives in repo secrets.
+name: convert-paper
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: "Direct download URL of the PDF / image"
+        required: true
+      watermark:
+        description: "keep | remove"
+        default: "keep"
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r requirements.txt
+      - name: Download input
+        env: { SRC_URL: "${{ inputs.url }}" }
+        run: |
+          mkdir -p in
+          python - <<'PY'
+          import os, urllib.parse, urllib.request
+          url = os.environ["SRC_URL"]
+          name = os.path.basename(urllib.parse.urlparse(url).path) or "paper.pdf"
+          urllib.request.urlretrieve(url, os.path.join("in", name))
+          PY
+      - name: Convert
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          WM: ${{ inputs.watermark }}
+        run: python cli.py in/* -o out --watermark "$WM"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slides
+          path: |
+            out/questions.pptx
+            out/questions_qa.html
+            out/questions_qa.csv
+          retention-days: 1

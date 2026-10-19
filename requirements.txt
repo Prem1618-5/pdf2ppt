@@ -1,0 +1,9 @@
+pymupdf>=1.24
+python-pptx>=1.0
+pillow>=10
+numpy>=1.26
+opencv-python-headless>=4.9
+requests>=2.31
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9

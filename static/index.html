@@ -3,67 +3,93 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#f3f5f9">
 <title>Question Paper to Slides</title>
-<link rel="icon" href="data:,">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232250c8'/%3E%3Crect x='7' y='9' width='18' height='14' rx='2' fill='none' stroke='%23fff' stroke-width='2'/%3E%3Cpath d='M11 14h10M11 18h6' stroke='%23fff' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
 
+<!-- icon sprite: one drawn set, 24px grid, 1.75 stroke -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></symbol>
+    <symbol id="i-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="i-warn" viewBox="0 0 24 24"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></symbol>
+  </defs>
+</svg>
+
 <!-- ============ 1. UPLOAD ============ -->
 <section id="scrUpload" class="screen">
   <div class="wrap">
-    <h1>Question Paper &rarr; Slides</h1>
-    <p class="sub">Upload a question paper (PDF or photos of the pages). You get a PowerPoint with one question per slide, which you can check and fix here before downloading.</p>
+    <header class="intro">
+      <h1>Question paper to slides</h1>
+      <p class="sub">Upload a question paper as a PDF or as photos of the pages. You get a PowerPoint with one question per slide, which you can check and fix here before downloading.</p>
+    </header>
 
     <div class="card">
-      <label class="drop" for="fileInput">
-        <span class="drop-big">Click here to choose the PDF or picture files</span><br>
-        <span class="muted">You can choose several files. They are used in the order shown below.</span>
+      <label class="drop" id="dropZone" for="fileInput">
+        <svg class="ic ic-xl" aria-hidden="true"><use href="#i-upload"/></svg>
+        <span class="drop-big">Choose the PDF or picture files</span>
+        <span class="muted">or drag them here. You can add several files; they are used in the order listed.</span>
       </label>
       <input type="file" id="fileInput" class="file-hidden" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff">
       <ol id="fileList" class="file-list"></ol>
       <p id="fileClearRow" class="hidden"><button type="button" class="btn small sec" id="fileClear">Remove all files</button></p>
 
-      <div class="row">
-        <label class="row-label" for="optLang">Language when printed twice</label>
-        <select id="optLang">
-          <option value="en">English</option>
-          <option value="hi">Hindi</option>
-          <option value="both">Both</option>
-        </select>
-      </div>
-      <div class="row">
-        <label class="row-label" for="optRender">Question style</label>
-        <select id="optRender">
-          <option value="auto">Automatic</option>
-          <option value="snapshot">Picture of the question</option>
-          <option value="rebuild">Retype plain text questions</option>
-        </select>
+      <div class="fields">
+        <div class="row">
+          <label class="row-label" for="optLang">Language when printed twice</label>
+          <select id="optLang">
+            <option value="en">English</option>
+            <option value="hi">Hindi</option>
+            <option value="both">Both</option>
+          </select>
+        </div>
+        <div class="row">
+          <label class="row-label" for="optRender">Question style</label>
+          <select id="optRender">
+            <option value="auto">Automatic</option>
+            <option value="snapshot">Picture of the question</option>
+            <option value="rebuild">Retype plain text questions</option>
+          </select>
+        </div>
       </div>
 
       <div class="keys-panel">
-        <button type="button" class="link-btn" id="keysToggle">&#9656; Gemini API keys (optional)</button>
+        <button type="button" class="link-btn" id="keysToggle" aria-expanded="false" aria-controls="keysBody"><svg class="ic chev" aria-hidden="true"><use href="#i-right"/></svg>Gemini API keys (optional)</button>
         <div id="keysBody" class="hidden">
           <p class="muted">Add as many keys as you have. When one key reaches its free limit the next one is used automatically. Keys from different Google projects give more free requests (keys in the same project share one limit).</p>
-          <textarea id="keysText" rows="4" spellcheck="false" placeholder="One key per line"></textarea>
+          <textarea id="keysText" rows="4" spellcheck="false" placeholder="One key per line" aria-label="Gemini API keys, one per line"></textarea>
           <div class="keys-actions">
-            <button type="button" class="btn sec" id="keysCheck">Check keys</button>
+            <button type="button" class="btn sec small" id="keysCheck">Check keys</button>
             <label class="check"><input type="checkbox" id="keysRemember"> Remember keys on this computer</label>
           </div>
-          <ul id="keysResult" class="keys-result"></ul>
+          <ul id="keysResult" class="keys-result" aria-live="polite"></ul>
         </div>
       </div>
 
       <div class="go-row">
         <button type="button" class="btn big" id="goBtn" disabled>Make slides</button>
       </div>
-      <p class="muted">Files are deleted from the server after processing. Results are deleted after a while, so download your PowerPoint when you are happy with it.</p>
+      <p class="muted fine">Files are deleted from the server after processing. Results are deleted after a while, so download your PowerPoint when you are happy with it.</p>
     </div>
 
-    <div class="card">
-      <button type="button" class="btn sec" id="importBtn">Open an existing deck (.pptx) to edit</button>
-      <input type="file" id="importInput" class="file-hidden" accept=".pptx">
-      <span class="muted">&nbsp;A deck made by this tool, or any deck with one picture per slide.</span>
+    <div class="card import-card">
+      <div>
+        <button type="button" class="btn sec" id="importBtn">Open an existing deck to edit</button>
+        <input type="file" id="importInput" class="file-hidden" accept=".pptx">
+      </div>
+      <span class="muted">A .pptx made by this tool, or any deck with one picture per slide.</span>
     </div>
   </div>
 </section>
@@ -71,17 +97,17 @@
 <!-- ============ 2. PROGRESS ============ -->
 <section id="scrProgress" class="screen hidden">
   <div class="wrap">
-    <h1>Making your slides&hellip;</h1>
+    <header class="intro"><h1>Making your slides&hellip;</h1></header>
     <div class="card">
-      <div id="progStage" class="prog-stage">Uploading&hellip;</div>
-      <div class="bar"><div id="progBar"></div></div>
+      <div id="progStage" class="prog-stage" role="status" aria-live="polite">Uploading&hellip;</div>
+      <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-label="Progress"><div id="progBar"></div></div>
       <div id="progDetail" class="muted"></div>
       <table id="progKeys" class="key-table hidden">
         <thead><tr><th>Key</th><th>State</th><th>Requests used</th></tr></thead>
         <tbody id="progKeysBody"></tbody>
       </table>
       <div id="progError" class="hidden">
-        <p class="bad" id="progErrorText"></p>
+        <p class="bad" id="progErrorText" role="alert"></p>
         <button type="button" class="btn" id="progBack">Back to start</button>
       </div>
     </div>
@@ -92,17 +118,17 @@
 <section id="scrEditor" class="screen hidden">
   <div class="topbar">
     <div class="topbar-row">
-      <div id="edSummary" class="summary"></div>
+      <div id="edSummary" class="summary" role="status"></div>
       <div class="top-buttons">
-        <button type="button" class="btn sec" id="undoBtn" title="Undo (Ctrl+Z)">&#8630; Undo</button>
-        <button type="button" class="btn green" id="exportBtn">Download PowerPoint</button>
+        <button type="button" class="btn sec" id="undoBtn" title="Undo (Ctrl+Z)"><svg class="ic" aria-hidden="true"><use href="#i-undo"/></svg>Undo</button>
         <button type="button" class="btn sec" id="reportBtn">QA report</button>
         <button type="button" class="btn sec" id="restartBtn">Start over</button>
+        <button type="button" class="btn green" id="exportBtn">Download PowerPoint</button>
       </div>
     </div>
     <div class="topbar-row settings">
       <label class="check"><input type="checkbox" id="setBlank"> Blank slide after each question</label>
-      <span class="set-group">Question size:
+      <span class="set-group" role="radiogroup" aria-label="Question size">Question size
         <label class="radio"><input type="radio" name="setLayout" id="setLayoutFill" value="fill"> Fill slide</label>
         <label class="radio"><input type="radio" name="setLayout" id="setLayoutTR" value="top-right"> Top-right corner</label>
       </span>
@@ -113,7 +139,7 @@
   <div class="editor">
     <!-- slide list -->
     <div class="pane-list">
-      <div class="pane-title">Slides <span class="muted">(drag to reorder)</span></div>
+      <div class="pane-title">Slides <span class="muted">drag to reorder</span></div>
       <div id="slideList" class="slide-list"></div>
     </div>
 
@@ -121,11 +147,11 @@
     <div class="pane-preview" id="previewPane">
       <div id="frame" class="frame"></div>
       <div class="preview-nav">
-        <button type="button" class="btn sec small" id="prevSlide">&#9650; Previous</button>
+        <button type="button" class="btn sec small" id="prevSlide"><svg class="ic" aria-hidden="true"><use href="#i-up"/></svg>Previous</button>
         <span id="previewInfo"></span>
-        <button type="button" class="btn sec small" id="nextSlide">Next &#9660;</button>
+        <button type="button" class="btn sec small" id="nextSlide">Next<svg class="ic" aria-hidden="true"><use href="#i-down"/></svg></button>
       </div>
-      <p class="muted center">Keyboard: Up / Down arrows to move, Delete to remove, Ctrl+Z to undo.</p>
+      <p class="muted center keys-hint"><kbd>&uarr;</kbd> <kbd>&darr;</kbd> move &nbsp; <kbd>Delete</kbd> remove &nbsp; <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo</p>
     </div>
 
     <!-- item panel -->
@@ -135,8 +161,8 @@
         <label class="field-label" for="pLabel">Question number / label</label>
         <input type="text" id="pLabel" class="wide">
 
-        <div class="field-label">Style</div>
-        <div class="toggle">
+        <div class="field-label" id="pStyleLabel">Style</div>
+        <div class="toggle" role="group" aria-labelledby="pStyleLabel">
           <button type="button" id="pRenderPic">Picture</button><button type="button" id="pRenderText">Text</button>
         </div>
 
@@ -145,8 +171,10 @@
           <textarea id="pStem" rows="5" class="wide"></textarea>
           <div class="field-label">Options</div>
           <div id="pOptions"></div>
-          <button type="button" class="btn small sec" id="pAddOpt">+ Add option</button>
-          <button type="button" class="btn small" id="pSaveText">Save text</button>
+          <div class="inline-btns">
+            <button type="button" class="btn small sec" id="pAddOpt">+ Add option</button>
+            <button type="button" class="btn small" id="pSaveText">Save text</button>
+          </div>
         </div>
 
         <label class="field-label" for="pBlank">Blank slide after this one</label>
@@ -173,20 +201,20 @@
 </section>
 
 <!-- ============ CROP EDITOR (modal) ============ -->
-<div id="cropModal" class="modal hidden">
+<div id="cropModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="cropTitle">
   <div class="modal-box">
     <div class="modal-head">
       <b id="cropTitle">Adjust crop</b>
       <span id="cropHelp" class="muted"></span>
     </div>
     <div class="crop-tools">
-      <button type="button" class="btn sec small" id="cropPrev">&#9664; Previous page</button>
+      <button type="button" class="btn sec small" id="cropPrev"><svg class="ic" aria-hidden="true"><use href="#i-left"/></svg>Previous page</button>
       <span id="cropPageInfo" class="page-info"></span>
-      <button type="button" class="btn sec small" id="cropNext">Next page &#9654;</button>
+      <button type="button" class="btn sec small" id="cropNext">Next page<svg class="ic" aria-hidden="true"><use href="#i-right"/></svg></button>
       <button type="button" class="btn sec small" id="cropFit">Fit width</button>
       <button type="button" class="btn danger small" id="cropRemove">Remove selected part</button>
       <span id="cropLabelWrap" class="hidden">
-        <label for="cropLabel">Question number:</label>
+        <label for="cropLabel">Question number</label>
         <input type="text" id="cropLabel" size="6">
       </span>
     </div>
@@ -201,8 +229,8 @@
   </div>
 </div>
 
-<div id="toast" class="toast hidden"></div>
-<div id="busy" class="busy hidden">Working&hellip;</div>
+<div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+<div id="busy" class="busy hidden" role="status"><span class="spin" aria-hidden="true"></span>Working&hellip;</div>
 
 <script src="/static/app.js"></script>
 </body>

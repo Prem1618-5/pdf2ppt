@@ -117,7 +117,15 @@ app.mount("/static", StaticFiles(directory=os.path.join(ROOT, "static")), name="
 @app.get("/", response_class=HTMLResponse)
 def index():
     with open(os.path.join(ROOT, "static", "index.html"), encoding="utf-8") as f:
-        return f.read()
+        html = f.read()
+    # Version the asset URLs by file time so a redeploy is picked up at once, never a stale cached copy.
+    for name in ("app.css", "app.js"):
+        try:
+            v = int(os.path.getmtime(os.path.join(ROOT, "static", name)))
+        except OSError:
+            continue
+        html = html.replace(f"/static/{name}", f"/static/{name}?v={v}")
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/healthz")

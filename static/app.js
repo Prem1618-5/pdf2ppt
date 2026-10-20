@@ -83,6 +83,9 @@
     x.send(payload);
   }
 
+  /* Drawn icons come from the sprite in index.html. */
+  function ic(name) { return '<svg class="ic" aria-hidden="true"><use href="#i-' + name + '"/></svg>'; }
+
   /* Toasts: green "Saved", red errors (stay a bit longer). */
   var toastTimer = null;
   function toast(msg, isError) {
@@ -124,9 +127,11 @@
     var ol = $('fileList');
     ol.innerHTML = '';
     for (var i = 0; i < chosenFiles.length; i++) {
-      var li = el('li', '', esc(chosenFiles[i].name) + ' ');
-      var b = el('button', '', 'remove');
+      var li = el('li', '', ic('file') + '<span class="fname">' + esc(chosenFiles[i].name) + '</span>');
+      var b = el('button', '', ic('x'));
       b.type = 'button';
+      b.title = 'Remove ' + chosenFiles[i].name;
+      b.setAttribute('aria-label', 'Remove ' + chosenFiles[i].name);
       b.setAttribute('data-i', i);
       b.onclick = function () { chosenFiles.splice(+this.getAttribute('data-i'), 1); renderFileList(); };
       li.appendChild(b);
@@ -136,12 +141,34 @@
     $('goBtn').disabled = chosenFiles.length === 0;
   }
 
-  $('fileInput').onchange = function () {
-    var f = this.files;
-    for (var i = 0; i < f.length; i++) chosenFiles.push(f[i]);
-    this.value = '';                       // allow picking the same file again later
+  var FILE_OK = /\.(pdf|png|jpe?g|webp|bmp|tiff?)$/i;
+  function addFiles(f) {
+    var skipped = 0;
+    for (var i = 0; i < f.length; i++) {
+      if (FILE_OK.test(f[i].name)) chosenFiles.push(f[i]); else skipped++;
+    }
     renderFileList();
+    if (skipped) toast(skipped + ' file' + (skipped === 1 ? ' was' : 's were') + ' skipped. Only PDF and picture files can be used.', true);
+  }
+  $('fileInput').onchange = function () {
+    addFiles(this.files);
+    this.value = '';                       // allow picking the same file again later
   };
+
+  /* drag and drop onto the upload box */
+  (function () {
+    var z = $('dropZone');
+    function stop(e) { e.preventDefault(); if (e.stopPropagation) e.stopPropagation(); }
+    z.ondragenter = z.ondragover = function (e) { stop(e); setClass(z, 'over', true); };
+    z.ondragleave = function (e) { stop(e); setClass(z, 'over', false); };
+    z.ondrop = function (e) {
+      stop(e);
+      setClass(z, 'over', false);
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+    };
+    /* a file dropped outside the box must not make the browser navigate away from the page */
+    window.ondragover = window.ondrop = function (e) { e.preventDefault(); };
+  })();
   $('fileClear').onclick = function () { chosenFiles = []; renderFileList(); };
 
   /* --- Gemini keys --- */
@@ -157,7 +184,7 @@
   $('keysToggle').onclick = function () {
     var body = $('keysBody'), open = hasClass(body, 'hidden');
     show(body, open);
-    this.innerHTML = (open ? '&#9662;' : '&#9656;') + ' Gemini API keys (optional)';
+    this.setAttribute('aria-expanded', open ? 'true' : 'false');
   };
   $('keysRemember').onchange = rememberKeys;
   $('keysText').onchange = rememberKeys;
@@ -174,7 +201,7 @@
       var html = '';
       for (var i = 0; i < (res || []).length; i++) {
         var r = res[i];
-        html += '<li>' + (r.ok ? '<span class="ok">&#10003;</span> ' : '<span class="bad">&#10007;</span> ') + esc(r.masked) +
+        html += '<li>' + (r.ok ? '<span class="ok">' + ic('check') + '</span> ' : '<span class="bad">' + ic('x') + '</span> ') + esc(r.masked) +
           (r.ok ? ' <span class="muted">works</span>' : ' <span class="bad">' + esc(r.error || 'not working') + '</span>') + '</li>';
       }
       out.innerHTML = html || '<li class="muted">No answer for these keys.</li>';
@@ -186,7 +213,7 @@
       $('keysText').value = saved;
       $('keysRemember').checked = true;
       show($('keysBody'), true);
-      $('keysToggle').innerHTML = '&#9662; Gemini API keys (optional)';
+      $('keysToggle').setAttribute('aria-expanded', 'true');
     }
   })();
 
@@ -502,13 +529,13 @@
     row.id = 'row_' + it.id;
     row.setAttribute('draggable', 'true');
     row.setAttribute('data-id', it.id);
-    var warn = (typeof it.confidence === 'number' && it.confidence < 0.6) ? '<span class="slide-warn" title="The tool is not sure about this one. Please check it.">&#9888;</span>' : '';
+    var warn = (typeof it.confidence === 'number' && it.confidence < 0.6) ? '<span class="slide-warn" title="The tool is not sure about this one. Please check it.">' + ic('warn') + '<span class="sr">Check this slide</span></span>' : '';
     var last = idx === project.items.length - 1;
     row.innerHTML =
       '<div class="slide-top"><span class="slide-num">' + (idx + 1) + '</span>' + warn +
       '<span class="slide-label">' + (esc(it.label) || '<i>(no label)</i>') + '</span>' +
-      '<span class="slide-move"><button type="button" data-mv="-1" title="Move up"' + (idx === 0 ? ' disabled' : '') + '>&#9650;</button>' +
-      '<button type="button" data-mv="1" title="Move down"' + (last ? ' disabled' : '') + '>&#9660;</button></span></div>' +
+      '<span class="slide-move"><button type="button" data-mv="-1" title="Move up" aria-label="Move up"' + (idx === 0 ? ' disabled' : '') + '>' + ic('up') + '</button>' +
+      '<button type="button" data-mv="1" title="Move down" aria-label="Move down"' + (last ? ' disabled' : '') + '>' + ic('down') + '</button></span></div>' +
       (it.render === 'text'
         ? '<div class="thumb-text"><b>' + esc(it.label) + '</b> ' + esc(it.stem) + '</div>'
         : '<img class="thumb" alt="" draggable="false" loading="lazy" src="' + esc(thumbUrl(it)) + '">') +
@@ -654,9 +681,10 @@
   function renderPreview() {
     var frame = $('frame'), it = selItem(), pane = $('previewPane');
     /* fit the 16:9 frame into the pane, leaving room for the buttons below */
-    var W = pane.clientWidth - 34, H = pane.clientHeight - 110;
-    if (H > 0 && W * 9 / 16 > H) W = H * 16 / 9;
-    W = Math.max(320, Math.floor(W));
+    var W = pane.clientWidth - 40, H = pane.clientHeight - 110;
+    /* on narrow screens the pane grows with its content, so only the width limits the frame */
+    if (window.innerWidth > 960 && H > 0 && W * 9 / 16 > H) W = H * 16 / 9;
+    W = Math.max(240, Math.floor(W));
     var FH = Math.round(W * 9 / 16);
     frame.style.width = W + 'px';
     frame.style.height = FH + 'px';
@@ -761,7 +789,7 @@
   function addOptionInput(val) {
     var box = $('pOptions'), n = box.children.length;
     var row = el('div', 'opt-row');
-    row.innerHTML = '<input type="text" placeholder="Option ' + String.fromCharCode(97 + n) + '"><button type="button" title="Remove this option">&#10005;</button>';
+    row.innerHTML = '<input type="text" placeholder="Option ' + String.fromCharCode(97 + n) + '"><button type="button" title="Remove this option" aria-label="Remove this option">' + ic('x') + '</button>';
     row.firstChild.value = val || '';
     row.lastChild.onclick = function () { box.removeChild(row); textDirty = true; saveText(); };
     box.appendChild(row);
